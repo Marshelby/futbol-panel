@@ -3,7 +3,6 @@ import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
 
 const PORCENTAJE_BARBERO = 50;
-const PIN_ELIMINACION = "1234";
 const CORTE_ESPECIAL_ID = "__especial__";
 
 export default function RegistrarCorte() {
@@ -23,6 +22,7 @@ export default function RegistrarCorte() {
 
   const [mostrarEliminar, setMostrarEliminar] = useState(false);
   const [pinInput, setPinInput] = useState("");
+  const [pinEliminacionReal, setPinEliminacionReal] = useState(null);
   const [corteEliminarId, setCorteEliminarId] = useState(null);
 
   const [editando, setEditando] = useState(null);
@@ -47,11 +47,7 @@ export default function RegistrarCorte() {
   }, []);
 
   async function cargarTodo() {
-    await Promise.all([
-      cargarBarberos(),
-      cargarTiposCorte(),
-      cargarCortesHoy(),
-    ]);
+    await Promise.all([cargarBarberos(), cargarTiposCorte(), cargarCortesHoy()]);
   }
 
   async function cargarBarberos() {
@@ -116,12 +112,15 @@ export default function RegistrarCorte() {
     });
   }
 
-  const resumen = useMemo(() => ({
-    totalDia: cortesHoy.reduce((a, c) => a + c.precio, 0),
-    totalBarberos: cortesHoy.reduce((a, c) => a + c.monto_barbero, 0),
-    totalBarberia: cortesHoy.reduce((a, c) => a + c.monto_barberia, 0),
-    cantidad: cortesHoy.length,
-  }), [cortesHoy]);
+  const resumen = useMemo(
+    () => ({
+      totalDia: cortesHoy.reduce((a, c) => a + c.precio, 0),
+      totalBarberos: cortesHoy.reduce((a, c) => a + c.monto_barbero, 0),
+      totalBarberia: cortesHoy.reduce((a, c) => a + c.monto_barberia, 0),
+      cantidad: cortesHoy.length,
+    }),
+    [cortesHoy]
+  );
 
   const bloqueado =
     estadoBarbero === "no_disponible" || estadoBarbero === "en_almuerzo";
@@ -141,7 +140,10 @@ export default function RegistrarCorte() {
       porcentaje_barbero: PORCENTAJE_BARBERO,
       monto_barbero: montoBarbero,
       monto_barberia: montoBarberia,
-      nota: tipoCorteId === CORTE_ESPECIAL_ID ? (nota || "Corte especial") : nota || null,
+      nota:
+        tipoCorteId === CORTE_ESPECIAL_ID
+          ? nota || "Corte especial"
+          : nota || null,
     });
 
     setBarberoId("");
@@ -165,30 +167,62 @@ export default function RegistrarCorte() {
     const montoBarbero = Math.round((editPrecio * PORCENTAJE_BARBERO) / 100);
     const montoBarberia = editPrecio - montoBarbero;
 
-    await supabase.from("cortes").update({
-      barbero_id: editBarberoId,
-      tipo_corte_id: editTipo === CORTE_ESPECIAL_ID ? null : editTipo,
-      precio: editPrecio,
-      monto_barbero: montoBarbero,
-      monto_barberia: montoBarberia,
-      nota: editTipo === CORTE_ESPECIAL_ID ? (editNota || "Corte especial") : editNota,
-    }).eq("id", editando);
+    await supabase
+      .from("cortes")
+      .update({
+        barbero_id: editBarberoId,
+        tipo_corte_id: editTipo === CORTE_ESPECIAL_ID ? null : editTipo,
+        precio: editPrecio,
+        monto_barbero: montoBarbero,
+        monto_barberia: montoBarberia,
+        nota:
+          editTipo === CORTE_ESPECIAL_ID
+            ? editNota || "Corte especial"
+            : editNota,
+      })
+      .eq("id", editando);
 
     setEditando(null);
     cargarCortesHoy();
   }
 
-  function abrirEliminar(id) {
-    setCorteEliminarId(id);
+  // 🔐 ÚNICA MEJORA: PIN REAL DE LA BARBERÍA
+  async function abrirEliminar(corte) {
+    setCorteEliminarId(corte.id);
     setPinInput("");
+
+    const { data: barbero } = await supabase
+      .from("barberos")
+      .select("barberia_id")
+      .eq("id", corte.barbero_id)
+      .single();
+
+    if (!barbero) {
+      alert("No se pudo obtener la barbería");
+      return;
+    }
+
+    const { data: barberia } = await supabase
+      .from("barberias")
+      .select("pin_eliminacion")
+      .eq("id", barbero.barberia_id)
+      .single();
+
+    if (!barberia) {
+      alert("No se pudo obtener el PIN de la barbería");
+      return;
+    }
+
+    setPinEliminacionReal(String(barberia.pin_eliminacion));
     setMostrarEliminar(true);
   }
 
   async function confirmarEliminar() {
-    if (pinInput !== PIN_ELIMINACION) {
+    if (pinInput !== pinEliminacionReal) {
       alert("PIN incorrecto");
       return;
     }
+
     await supabase.from("cortes").delete().eq("id", corteEliminarId);
     setMostrarEliminar(false);
     cargarCortesHoy();
@@ -196,7 +230,6 @@ export default function RegistrarCorte() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8">
-
       {/* RESUMEN */}
       <div className="grid md:grid-cols-4 gap-4">
         {[
@@ -214,9 +247,8 @@ export default function RegistrarCorte() {
         ))}
       </div>
 
-      {/* FORM + LISTADO LADO A LADO */}
+      {/* FORM + LISTADO */}
       <div className="grid md:grid-cols-[360px_1fr] gap-6 items-start">
-
         {/* FORM REGISTRAR */}
         <div className="bg-white border border-black p-3 rounded">
           <h2 className="text-lg font-semibold mb-3">Registrar corte</h2>
@@ -230,8 +262,10 @@ export default function RegistrarCorte() {
             className="w-full border border-black p-2 rounded mb-2"
           >
             <option value="">Seleccionar barbero</option>
-            {barberos.map(b => (
-              <option key={b.id} value={b.id}>{b.nombre}</option>
+            {barberos.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.nombre}
+              </option>
             ))}
           </select>
 
@@ -239,6 +273,7 @@ export default function RegistrarCorte() {
             <div className="mb-2 text-sm text-orange-600 border border-orange-500 p-2 rounded">
               ⚠ El barbero no está disponible.
               <button
+                type="button"
                 onClick={() => navigate("/estado-diario")}
                 className="underline ml-1"
               >
@@ -255,14 +290,14 @@ export default function RegistrarCorte() {
               if (v === CORTE_ESPECIAL_ID) {
                 setPrecio(0);
               } else {
-                const t = tiposCorte.find(x => x.id === v);
+                const t = tiposCorte.find((x) => x.id === v);
                 setPrecio(t?.precio || 0);
               }
             }}
             className="w-full border border-black p-2 rounded mb-2"
           >
             <option value="">Seleccionar tipo de corte</option>
-            {tiposCorte.map(t => (
+            {tiposCorte.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.nombre} (${t.precio})
               </option>
@@ -288,6 +323,7 @@ export default function RegistrarCorte() {
           />
 
           <button
+            type="button"
             onClick={registrarCorte}
             disabled={registrando || bloqueado}
             className={`w-full py-2 rounded text-white ${
@@ -304,8 +340,11 @@ export default function RegistrarCorte() {
             Cortes de hoy
           </h2>
 
-          {cortesHoy.map(c => (
-            <div key={c.id} className="flex justify-between border-b border-black py-2">
+          {cortesHoy.map((c) => (
+            <div
+              key={c.id}
+              className="flex justify-between border-b border-black py-2"
+            >
               <div>
                 <div className="font-medium">
                   {c.barberos.nombre} — {c.tipos_corte?.nombre || "Corte especial"}
@@ -317,23 +356,138 @@ export default function RegistrarCorte() {
                   ${c.precio.toLocaleString("es-CL")}
                 </div>
               </div>
+
               <div className="flex gap-4 text-sm">
-                <button onClick={() => iniciarEdicion(c)} className="underline">
+                <button
+                  type="button"
+                  onClick={() => iniciarEdicion(c)}
+                  className="underline"
+                >
                   Editar
                 </button>
-                <button onClick={() => abrirEliminar(c.id)} className="text-red-600 underline">
+                <button
+                  type="button"
+                  onClick={() => abrirEliminar(c)}
+                  className="text-red-600 underline"
+                >
                   Eliminar
                 </button>
               </div>
             </div>
           ))}
         </div>
-
       </div>
 
-      {/* MODALES (sin cambios) */}
-      {/* … se mantienen exactamente iguales … */}
+      {/* MODAL EDITAR */}
+      {editando && (
+        <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center">
+          <div className="bg-white border border-black p-4 rounded w-[420px]">
+            <h3 className="font-semibold text-lg mb-3">Editar corte</h3>
 
+            <select
+              value={editBarberoId}
+              onChange={(e) => setEditBarberoId(e.target.value)}
+              className="w-full border border-black p-2 rounded mb-2"
+            >
+              {barberos.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.nombre}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={editTipo}
+              onChange={(e) => {
+                const v = e.target.value;
+                setEditTipo(v);
+                if (v === CORTE_ESPECIAL_ID) {
+                  setEditPrecio(0);
+                } else {
+                  const t = tiposCorte.find((x) => x.id === v);
+                  setEditPrecio(t?.precio || 0);
+                }
+              }}
+              className="w-full border border-black p-2 rounded mb-2"
+            >
+              {tiposCorte.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.nombre}
+                </option>
+              ))}
+              <option value={CORTE_ESPECIAL_ID}>Corte especial</option>
+            </select>
+
+            <input
+              type="number"
+              value={editPrecio}
+              disabled={editTipo !== CORTE_ESPECIAL_ID}
+              onChange={(e) => setEditPrecio(Number(e.target.value))}
+              className={`w-full border border-black p-2 rounded mb-2 ${
+                editTipo !== CORTE_ESPECIAL_ID ? "bg-gray-100" : ""
+              }`}
+            />
+
+            <textarea
+              value={editNota}
+              onChange={(e) => setEditNota(e.target.value)}
+              className="w-full border border-black p-2 rounded mb-4"
+              placeholder="Nota"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditando(null)}
+                className="border border-black px-3 py-1 rounded"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={guardarEdicion}
+                className="bg-black text-white px-3 py-1 rounded"
+              >
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ELIMINAR */}
+      {mostrarEliminar && (
+        <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center">
+          <div className="bg-white border border-black p-4 rounded w-[320px]">
+            <h3 className="font-semibold text-lg mb-3">Eliminar corte</h3>
+
+            <input
+              type="password"
+              placeholder="PIN"
+              value={pinInput}
+              onChange={(e) => setPinInput(e.target.value)}
+              className="w-full border border-black p-2 rounded mb-4"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setMostrarEliminar(false)}
+                className="border border-black px-3 py-1 rounded"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmarEliminar}
+                className="bg-red-600 text-white px-3 py-1 rounded"
+              >
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

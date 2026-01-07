@@ -1,31 +1,76 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
+
+/* =========================
+   HELPERS
+========================= */
+function formatHoraCL(dateStr) {
+  return new Date(dateStr).toLocaleTimeString("es-CL", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatFechaCL(dateStr) {
+  return new Date(dateStr).toLocaleDateString("es-CL");
+}
+
+function agruparPorFecha(cortes) {
+  return cortes.reduce((acc, c) => {
+    const fecha = formatFechaCL(c.created_at);
+    if (!acc[fecha]) acc[fecha] = [];
+    acc[fecha].push(c);
+    return acc;
+  }, {});
+}
 
 function estadoLabel(estado) {
   if (estado === "disponible") return "Disponible";
-  if (estado === "en_almuerzo") return "En almuerzo";
+  if (estado === "en_colacion" || estado === "en_almuerzo")
+    return "En colación";
   return "No disponible";
 }
 
-function estadoClass(estado) {
-  if (estado === "disponible") return "bg-green-100 text-green-700 border-green-300";
-  if (estado === "en_almuerzo") return "bg-yellow-100 text-yellow-700 border-yellow-300";
-  return "bg-red-100 text-red-700 border-red-300";
+function estadoBadgeClass(estado) {
+  if (estado === "disponible") return "bg-green-600 text-white";
+  if (estado === "en_colacion" || estado === "en_almuerzo")
+    return "bg-yellow-400 text-black";
+  return "bg-red-600 text-white";
 }
 
+/* =========================
+   COMPONENT
+========================= */
 export default function Barberos() {
   const [barberos, setBarberos] = useState([]);
-  const [estados, setEstados] = useState({});
   const [stats, setStats] = useState({});
+  const [estados, setEstados] = useState({});
   const [loading, setLoading] = useState(true);
 
   const [modalAbierto, setModalAbierto] = useState(false);
   const [barberoSeleccionado, setBarberoSeleccionado] = useState(null);
-  const [cortesHoy, setCortesHoy] = useState([]);
+  const [tabModal, setTabModal] = useState("hoy");
+  const [cortesMesBarbero, setCortesMesBarbero] = useState([]);
 
   useEffect(() => {
     cargarTodo();
   }, []);
+
+  useEffect(() => {
+    if (!modalAbierto) return;
+
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") cerrarModal();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = "";
+    };
+  }, [modalAbierto]);
 
   async function cargarTodo() {
     setLoading(true);
@@ -37,23 +82,28 @@ export default function Barberos() {
 
     const { data: estadosData } = await supabase
       .from("estado_actual")
-      .select("barbero_id, estado, updated_at");
+      .select("barbero_id, estado");
+
+    const estadosMap = {};
+    (estadosData || []).forEach((e) => {
+      estadosMap[e.barbero_id] = e.estado;
+    });
 
     const { data: cortesData } = await supabase
       .from("cortes")
       .select("barbero_id, created_at, monto_barbero");
 
-    const estadosMap = {};
-    estadosData?.forEach((e) => {
-      estadosMap[e.barbero_id] = e;
-    });
+    const inicioHoy = new Date();
+    inicioHoy.setHours(0, 0, 0, 0);
 
-    const hoy = new Date();
-    const inicioHoy = new Date(hoy.setHours(0, 0, 0, 0));
-    const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const inicioMes = new Date(
+      inicioHoy.getFullYear(),
+      inicioHoy.getMonth(),
+      1
+    );
 
     const statsMap = {};
-    barberosData?.forEach((b) => {
+    (barberosData || []).forEach((b) => {
       statsMap[b.id] = {
         total_hoy: 0,
         cortes_hoy: 0,
@@ -62,145 +112,233 @@ export default function Barberos() {
       };
     });
 
-    cortesData?.forEach((c) => {
+    (cortesData || []).forEach((c) => {
       const fecha = new Date(c.created_at);
       const s = statsMap[c.barbero_id];
       if (!s) return;
 
+      const monto = Number(c.monto_barbero || 0);
+
       if (fecha >= inicioMes) {
-        s.ganancia_mes += c.monto_barbero;
+        s.ganancia_mes += monto;
         s.cortes_mes += 1;
       }
 
       if (fecha >= inicioHoy) {
-        s.total_hoy += c.monto_barbero;
+        s.total_hoy += monto;
         s.cortes_hoy += 1;
       }
     });
 
     setBarberos(barberosData || []);
-    setEstados(estadosMap);
     setStats(statsMap);
+    setEstados(estadosMap);
     setLoading(false);
   }
 
   async function abrirModal(barbero) {
-    const inicioHoy = new Date();
-    inicioHoy.setHours(0, 0, 0, 0);
+    setBarberoSeleccionado(barbero);
+    setTabModal("hoy");
+    setModalAbierto(true);
+
+    const inicioMes = new Date(
+      new Date().getFullYear(),
+      new Date().getMonth(),
+      1
+    );
 
     const { data } = await supabase
       .from("cortes")
       .select("created_at, precio, monto_barbero")
       .eq("barbero_id", barbero.id)
-      .gte("created_at", inicioHoy.toISOString())
-      .order("created_at", { ascending: true });
+      .gte("created_at", inicioMes.toISOString())
+      .order("created_at", { ascending: false });
 
-    setBarberoSeleccionado(barbero);
-    setCortesHoy(data || []);
-    setModalAbierto(true);
+    setCortesMesBarbero(data || []);
   }
 
   function cerrarModal() {
     setModalAbierto(false);
     setBarberoSeleccionado(null);
-    setCortesHoy([]);
+    setCortesMesBarbero([]);
   }
+
+  const inicioHoy = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  const cortesHoy = useMemo(
+    () => cortesMesBarbero.filter((c) => new Date(c.created_at) >= inicioHoy),
+    [cortesMesBarbero, inicioHoy]
+  );
+
+  const cortesAMostrar = tabModal === "hoy" ? cortesHoy : cortesMesBarbero;
+
+  const totalPeriodo = cortesAMostrar.reduce(
+    (acc, c) => {
+      acc.total += Number(c.precio || 0);
+      acc.barbero += Number(c.monto_barbero || 0);
+      acc.cortes += 1;
+      return acc;
+    },
+    { total: 0, barbero: 0, cortes: 0 }
+  );
+
+  const cortesAgrupados =
+    tabModal === "mes" ? agruparPorFecha(cortesAMostrar) : null;
+
+  const estadoSeleccionado = barberoSeleccionado
+    ? estados[barberoSeleccionado.id] ?? "no_disponible"
+    : "no_disponible";
 
   if (loading) return <p className="p-6">Cargando barberos…</p>;
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">Barberos</h1>
+      <h1 className="text-4xl font-extrabold mb-8">Barberos</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {barberos.map((b) => {
-          const estado = estados[b.id]?.estado ?? "no_disponible";
-          const s = stats[b.id] || {};
+          const s = stats[b.id];
+          const est = estados[b.id] ?? "no_disponible";
 
           return (
             <div
               key={b.id}
               onClick={() => abrirModal(b)}
-              className="border border-black rounded-xl p-5 bg-white cursor-pointer hover:bg-gray-50 transition"
+              className="cursor-pointer rounded-2xl bg-black/50 p-6 text-white transition-shadow duration-150 hover:shadow-2xl"
             >
-              <div className="flex justify-between items-center mb-3">
-                <h2 className="text-lg font-semibold">{b.nombre}</h2>
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-semibold border ${estadoClass(
-                    estado
-                  )}`}
-                >
-                  {estadoLabel(estado)}
-                </span>
+              <h2 className="text-5xl font-extrabold text-center mb-6">
+                {b.nombre}
+              </h2>
+
+              <div className="bg-black/80 rounded-xl p-6 text-center mb-4">
+                <p className="text-4xl font-extrabold">
+                  ${s.total_hoy.toLocaleString("es-CL")}
+                </p>
+                <p>{s.cortes_hoy} cortes hoy</p>
               </div>
 
-              <div className="text-sm space-y-2">
-                <div className="flex justify-between">
-                  <span>Ganancia mes</span>
-                  <span className="font-semibold">${s.ganancia_mes}</span>
-                </div>
+              <p className="text-sm">
+                Este mes: ${s.ganancia_mes.toLocaleString("es-CL")} ·{" "}
+                {s.cortes_mes} cortes
+              </p>
 
-                <div className="flex justify-between">
-                  <span>Cortes mes</span>
-                  <span className="font-semibold">{s.cortes_mes}</span>
-                </div>
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <span className="text-xs font-bold opacity-90">
+                  *CLICK PARA VER DETALLES*
+                </span>
 
-                <hr className="border-black/20 my-2" />
-
-                <div className="text-xs font-semibold uppercase text-gray-500">
-                  Hoy
-                </div>
-
-                <div className="flex justify-between">
-                  <span>Total día</span>
-                  <span className="font-semibold">${s.total_hoy}</span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>Cortes hoy</span>
-                  <span className="font-semibold">{s.cortes_hoy}</span>
-                </div>
-
-                <p className="text-xs text-gray-400 mt-3">
-                  Click para ver detalle
-                </p>
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-semibold ${estadoBadgeClass(
+                    est
+                  )}`}
+                >
+                  {estadoLabel(est)}
+                </span>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* MODAL */}
-      {modalAbierto && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white border border-black rounded-xl p-6 w-full max-w-md relative">
+      {modalAbierto && barberoSeleccionado && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          onMouseDown={(e) => e.target === e.currentTarget && cerrarModal()}
+        >
+          <div className="bg-white w-full max-w-4xl max-h-[85vh] rounded-xl flex flex-col relative">
             <button
               onClick={cerrarModal}
-              className="absolute top-2 right-3 text-gray-500 hover:text-black"
+              className="absolute top-4 right-4 text-xl z-10"
             >
               ✕
             </button>
 
-            <h2 className="text-xl font-bold mb-4">
-              Cortes de hoy — {barberoSeleccionado?.nombre}
-            </h2>
+            <div className="sticky top-0 bg-white z-10 p-6 border-b space-y-4">
+              <div className="flex items-center rounded-lg overflow-hidden w-fit border">
+                <button
+                  onClick={() => setTabModal("hoy")}
+                  className={`px-6 py-2 font-semibold ${
+                    tabModal === "hoy"
+                      ? "bg-black text-white"
+                      : "bg-white"
+                  }`}
+                >
+                  📅 HOY
+                </button>
+                <button
+                  onClick={() => setTabModal("mes")}
+                  className={`px-6 py-2 font-semibold ${
+                    tabModal === "mes"
+                      ? "bg-black text-white"
+                      : "bg-white"
+                  }`}
+                >
+                  📆 ESTE MES
+                </button>
+              </div>
 
-            {cortesHoy.length === 0 ? (
-              <p className="text-sm text-gray-500">No hay cortes hoy.</p>
-            ) : (
-              <ul className="space-y-2 text-sm">
-                {cortesHoy.map((c, i) => (
-                  <li key={i} className="border border-black/30 rounded p-2">
-                    <p>
-                      Hora:{" "}
-                      {new Date(c.created_at).toLocaleTimeString("es-CL")}
-                    </p>
-                    <p>Precio: ${c.precio}</p>
-                    <p>Ganancia barbero: ${c.monto_barbero}</p>
-                  </li>
-                ))}
-              </ul>
-            )}
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="text-lg font-bold">
+                  Cortes — {barberoSeleccionado.nombre}
+                </h3>
+
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-semibold ${estadoBadgeClass(
+                    estadoSeleccionado
+                  )}`}
+                >
+                  {estadoLabel(estadoSeleccionado)}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="border rounded-lg p-3">
+                  <p className="text-xs text-gray-500">Cortes</p>
+                  <p className="font-bold">{totalPeriodo.cortes}</p>
+                </div>
+                <div className="border rounded-lg p-3">
+                  <p className="text-xs text-gray-500">Total</p>
+                  <p className="font-bold">
+                    ${totalPeriodo.total.toLocaleString("es-CL")}
+                  </p>
+                </div>
+                <div className="border rounded-lg p-3">
+                  <p className="text-xs text-gray-500">Barbero</p>
+                  <p className="font-bold">
+                    ${totalPeriodo.barbero.toLocaleString("es-CL")}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto px-6 pb-6">
+              {totalPeriodo.cortes === 0 ? (
+                <p className="text-center text-gray-500 py-10">
+                  No hay cortes para mostrar
+                </p>
+              ) : (
+                <ul className="divide-y border rounded-lg">
+                  {cortesAMostrar.map((c, i) => (
+                    <li key={i} className="py-3 px-3 flex justify-between">
+                      <span>{formatHoraCL(c.created_at)}</span>
+                      <span className="text-right">
+                        <div className="font-bold">
+                          ${Number(c.precio).toLocaleString("es-CL")}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          Barbero: $
+                          {Number(c.monto_barbero).toLocaleString("es-CL")}
+                        </div>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}
