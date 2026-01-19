@@ -10,6 +10,15 @@ const RECINTO_ID = "7815073b-e90a-4c19-b5da-9ba5a6e7c848";
    FECHAS
 ========================= */
 const DIAS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do"];
+const DIAS_LARGO = [
+  "LUNES",
+  "MARTES",
+  "MIÉRCOLES",
+  "JUEVES",
+  "VIERNES",
+  "SÁBADO",
+  "DOMINGO",
+];
 const MESES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
@@ -33,6 +42,7 @@ const formatCLP = (n) =>
 
 export default function Reservas() {
   const hoy = new Date();
+  const hoyISO = toISO(hoy);
 
   const [inicioSemana, setInicioSemana] = useState(startOfWeek(hoy));
   const [fechaSeleccionada, setFechaSeleccionada] = useState(toISO(hoy));
@@ -43,6 +53,7 @@ export default function Reservas() {
   const [pagos, setPagos] = useState([]);
 
   const [modalData, setModalData] = useState(null);
+  const [mostrarAdvertencia, setMostrarAdvertencia] = useState(false);
 
   /* =========================
      CARGA BASE
@@ -102,7 +113,6 @@ export default function Reservas() {
 
   useEffect(() => {
     cargarAgendaSemana(inicioSemana);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inicioSemana]);
 
   /* =========================
@@ -131,6 +141,12 @@ export default function Reservas() {
 
   const mesVisible = `${MESES[inicioSemana.getMonth()]} ${inicioSemana.getFullYear()}`;
 
+  const fechaSeleccionadaTexto = useMemo(() => {
+    const d = new Date(`${fechaSeleccionada}T00:00:00`);
+    const dia = DIAS_LARGO[d.getDay() === 0 ? 6 : d.getDay() - 1];
+    return `${dia} ${d.getDate()}/${d.getMonth() + 1}`;
+  }, [fechaSeleccionada]);
+
   /* =========================
      PRECIO (RPC)
   ========================= */
@@ -142,16 +158,14 @@ export default function Reservas() {
     });
 
     if (error) return null;
-    // OJO: data puede ser 0 (válido) -> no usar if(data)
     if (data === null || typeof data === "undefined") return null;
     return Number(data);
   };
 
   /* =========================
-     ABRIR MODAL (asegura pagos_reservas + total)
+     ABRIR MODAL
   ========================= */
   const abrirModal = async (agendaItem, pago, hora) => {
-    // Siempre tratamos monto_abonado como número (default 0)
     let pagoActual = pago
       ? {
           ...pago,
@@ -160,7 +174,6 @@ export default function Reservas() {
         }
       : null;
 
-    // Si no existe registro de pago o no tiene total, calculamos total y upsert
     const necesitaTotal =
       !pagoActual || pagoActual.monto_total === 0 || Number.isNaN(pagoActual.monto_total);
 
@@ -169,7 +182,7 @@ export default function Reservas() {
 
       if (precio !== null) {
         const montoAbonado = pagoActual?.monto_abonado ?? 0;
-        const estadoPago = pagoActual?.estado_pago === "pagado" ? "pagado" : "abono"; // sin "por_pagar"
+        const estadoPago = pagoActual?.estado_pago === "pagado" ? "pagado" : "abono";
 
         await supabase
           .from("pagos_reservas")
@@ -177,7 +190,7 @@ export default function Reservas() {
             {
               agenda_cancha_id: agendaItem.id,
               monto_total: precio,
-              monto_abonado: montoAbonado, // default 0
+              monto_abonado: montoAbonado,
               estado_pago: estadoPago,
             },
             { onConflict: "agenda_cancha_id" }
@@ -190,26 +203,22 @@ export default function Reservas() {
           estado_pago: estadoPago,
         };
 
-        // refrescar cache local de pagos para que la tabla cambie altiro
         setPagos((prev) => {
           const sin = prev.filter((x) => x.agenda_cancha_id !== agendaItem.id);
           return [...sin, pagoActual];
         });
       }
-    } else {
-      // Igual normalizamos estado: si no es pagado, lo tratamos como "abono"
-      if (pagoActual.estado_pago !== "pagado") {
-        pagoActual.estado_pago = "abono";
-      }
+    } else if (pagoActual.estado_pago !== "pagado") {
+      pagoActual.estado_pago = "abono";
     }
 
     setModalData({ agenda: agendaItem, pago: pagoActual, hora });
   };
 
   /* =========================
-     MARCAR PAGADO
+     PAGAR
   ========================= */
-  const marcarPagado = async () => {
+  const ejecutarPago = async () => {
     if (!modalData?.agenda?.id) return;
 
     const total = Number(modalData.pago?.monto_total || 0);
@@ -226,8 +235,17 @@ export default function Reservas() {
         { onConflict: "agenda_cancha_id" }
       );
 
+    setMostrarAdvertencia(false);
     setModalData(null);
     await cargarAgendaSemana(inicioSemana);
+  };
+
+  const marcarPagado = () => {
+    if (fechaSeleccionada !== hoyISO) {
+      setMostrarAdvertencia(true);
+      return;
+    }
+    ejecutarPago();
   };
 
   /* =========================
@@ -238,7 +256,10 @@ export default function Reservas() {
       <h1 className="text-2xl font-black mb-1">Reservas</h1>
       <p className="text-gray-500 mb-3">Estado de pagos por cancha y horario</p>
 
-      <div className="text-lg font-bold mb-4">{mesVisible}</div>
+      <div className="text-lg font-bold">{mesVisible}</div>
+      <div className="text-xl font-black text-blue-700 mb-4">
+        {fechaSeleccionadaTexto}
+      </div>
 
       <div className="flex items-center gap-2 mb-6">
         <button onClick={() => setInicioSemana(addDays(inicioSemana, -7))}>◀</button>
@@ -273,9 +294,7 @@ export default function Reservas() {
           <tr className="bg-gray-100">
             <th className="p-2 border">Hora</th>
             {canchas.map((c) => (
-              <th key={c.id} className="p-2 border">
-                {c.nombre}
-              </th>
+              <th key={c.id} className="p-2 border">{c.nombre}</th>
             ))}
           </tr>
         </thead>
@@ -283,17 +302,19 @@ export default function Reservas() {
         <tbody>
           {horas.map((h) => (
             <tr key={h.id}>
-              <td className="p-2 border font-semibold">{String(h.hora).slice(0, 5)}</td>
+              <td className="p-2 border font-semibold">
+                {String(h.hora).slice(0, 5)}
+              </td>
 
               {canchas.map((c) => {
-                const agendaItem = mapaAgenda[`${fechaSeleccionada}_${c.id}_${h.id}`];
+                const agendaItem =
+                  mapaAgenda[`${fechaSeleccionada}_${c.id}_${h.id}`];
                 const pago = agendaItem ? mapaPagos[agendaItem.id] : null;
 
                 let texto = "Libre";
                 let color = "bg-green-100 text-green-700";
 
                 if (agendaItem) {
-                  // Siempre mostramos abono (incluye 0), salvo pagado
                   const montoAbonado = Number(pago?.monto_abonado || 0);
                   const estado = pago?.estado_pago;
 
@@ -324,32 +345,22 @@ export default function Reservas() {
       </table>
 
       {modalData && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
-          <div className="bg-white rounded-lg p-6 w-96">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-96 relative">
             <h2 className="text-lg font-bold mb-2">Reserva</h2>
 
-            <p>
-              <strong>Cliente:</strong> {modalData.agenda.nombre_cliente}
-            </p>
-            <p>
-              <strong>Fecha:</strong> {modalData.agenda.fecha}
-            </p>
+            <p><strong>Cliente:</strong> {modalData.agenda.nombre_cliente}</p>
+            <p><strong>Fecha:</strong> {modalData.agenda.fecha}</p>
 
-            <p>
-              <strong>Abono:</strong> ${formatCLP(modalData.pago?.monto_abonado ?? 0)}
-            </p>
-            <p>
-              <strong>Total:</strong> ${formatCLP(modalData.pago?.monto_total ?? 0)}
-            </p>
+            <p><strong>Abono:</strong> ${formatCLP(modalData.pago?.monto_abonado ?? 0)}</p>
+            <p><strong>Total:</strong> ${formatCLP(modalData.pago?.monto_total ?? 0)}</p>
 
             {(() => {
               const total = Number(modalData.pago?.monto_total || 0);
               const abono = Number(modalData.pago?.monto_abonado || 0);
               const saldo = Math.max(0, total - abono);
               return (
-                <p className="mb-4">
-                  <strong>Saldo:</strong> ${formatCLP(saldo)}
-                </p>
+                <p className="mb-4"><strong>Saldo:</strong> ${formatCLP(saldo)}</p>
               );
             })()}
 
@@ -368,6 +379,36 @@ export default function Reservas() {
             >
               Cerrar
             </button>
+          </div>
+        </div>
+      )}
+
+      {mostrarAdvertencia && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-[420px] border-l-8 border-red-600">
+            <h3 className="text-lg font-black text-red-700 mb-2">⚠️ Advertencia</h3>
+            <p className="mb-3">
+              Estás marcando como <strong>PAGADO</strong> una reserva del día{" "}
+              <strong>{fechaSeleccionadaTexto}</strong>, no de HOY.
+            </p>
+            <p className="text-sm text-gray-600 mb-4">
+              Esta acción <strong>no se puede deshacer</strong>.
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={ejecutarPago}
+                className="flex-1 bg-red-600 text-white py-2 rounded"
+              >
+                Confirmar pago
+              </button>
+              <button
+                onClick={() => setMostrarAdvertencia(false)}
+                className="flex-1 border py-2 rounded"
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
         </div>
       )}

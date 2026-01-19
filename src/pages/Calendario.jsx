@@ -33,13 +33,14 @@ const addDays = (date, days) => {
 // JS: 0=Dom..6=Sa  -> 1=Lu..7=Do
 const dayToDiasSemana = (jsDate) => {
   const d = jsDate.getDay();
-  return d === 0 ? 7 : d; // 7 = Domingo
+  return d === 0 ? 7 : d;
 };
 
 export default function Calendario() {
   const hoy = new Date();
+  const hoyISO = toISO(hoy);
 
-  const [fechaSeleccionada, setFechaSeleccionada] = useState(toISO(hoy));
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(hoyISO);
   const [inicioSemana, setInicioSemana] = useState(startOfWeek(hoy));
 
   const [canchas, setCanchas] = useState([]);
@@ -49,13 +50,14 @@ export default function Calendario() {
 
   const [celdaActiva, setCeldaActiva] = useState(null);
   const [nombreCliente, setNombreCliente] = useState("");
-  const [abono, setAbono] = useState("0"); // 👈 DEFAULT 0
+  const [abono, setAbono] = useState("0");
   const [errorNombre, setErrorNombre] = useState(false);
 
-  // precios_cancha cache + precioMaximo modal
   const [preciosCancha, setPreciosCancha] = useState([]);
   const [precioMaximo, setPrecioMaximo] = useState(null);
   const [errorAbono, setErrorAbono] = useState(false);
+
+  const [errorLiberarPagado, setErrorLiberarPagado] = useState(false);
 
   /* =========================
      CARGA BASE
@@ -134,34 +136,36 @@ export default function Calendario() {
   const mesVisible = `${MESES[inicioSemana.getMonth()]} ${inicioSemana.getFullYear()}`;
 
   /* =========================
-     PRECIO MAXIMO (desde precios_cancha)
+     PRECIO MAXIMO
   ========================= */
   const calcularPrecioMaximo = (fechaISO, horaStr) => {
     if (!fechaISO || !horaStr || !preciosCancha?.length) return null;
 
     const d = new Date(`${fechaISO}T00:00:00`);
-    const dia = dayToDiasSemana(d); // 1..7
+    const dia = dayToDiasSemana(d);
 
-    // horaStr viene tipo "15:00:00" (string). Comparación lexicográfica funciona en HH:MM:SS.
     const match = preciosCancha.find((p) => {
       const dias = Array.isArray(p.dias_semana) ? p.dias_semana.map(Number) : [];
-      const okDia = dias.includes(dia);
-      const okHora =
-        typeof p.hora_inicio === "string" &&
-        typeof p.hora_fin === "string" &&
+      return (
+        dias.includes(dia) &&
         horaStr >= p.hora_inicio &&
-        horaStr < p.hora_fin;
-      return okDia && okHora;
+        horaStr < p.hora_fin
+      );
     });
 
     return match ? Number(match.precio) : null;
   };
 
   /* =========================
-     ACCIONES
+     ACCIONES (FIX 406 + BLOQUEO PASADO)
   ========================= */
   const aplicarEstado = async (estado) => {
     if (!celdaActiva) return;
+
+    // 🔒 BLOQUEO DE DÍAS PASADOS
+    if (fechaSeleccionada < hoyISO) {
+      return;
+    }
 
     if (estado === "reservada" && nombreCliente.trim() === "") {
       setErrorNombre(true);
@@ -178,35 +182,46 @@ export default function Calendario() {
 
     setErrorNombre(false);
     setErrorAbono(false);
+    setErrorLiberarPagado(false);
 
-    // LIBERAR
-    if (estado === "disponible") {
-      const { data: agendaRow } = await supabase
-        .from("agenda_canchas")
-        .select("id")
-        .eq("fecha", fechaSeleccionada)
-        .eq("recinto_id", RECINTO_ID)
-        .eq("cancha_id", celdaActiva.cancha_id)
-        .eq("horario_id", celdaActiva.horario_id)
-        .single();
+    const { data: agendaRows } = await supabase
+      .from("agenda_canchas")
+      .select("id")
+      .eq("fecha", fechaSeleccionada)
+      .eq("recinto_id", RECINTO_ID)
+      .eq("cancha_id", celdaActiva.cancha_id)
+      .eq("horario_id", celdaActiva.horario_id)
+      .limit(1);
 
-      if (agendaRow?.id) {
-        await supabase
-          .from("pagos_reservas")
-          .delete()
-          .eq("agenda_cancha_id", agendaRow.id);
+    const agendaRow = agendaRows?.[0] || null;
+
+    if (agendaRow?.id) {
+      const { data: pagosRows } = await supabase
+        .from("pagos_reservas")
+        .select("estado_pago")
+        .eq("agenda_cancha_id", agendaRow.id)
+        .limit(1);
+
+      const pagoRow = pagosRows?.[0] || null;
+
+      if (pagoRow?.estado_pago === "pagado") {
+        setErrorLiberarPagado(true);
+        return;
       }
+    }
+
+    if (estado === "disponible" && agendaRow?.id) {
+      await supabase
+        .from("pagos_reservas")
+        .delete()
+        .eq("agenda_cancha_id", agendaRow.id);
 
       await supabase
         .from("agenda_canchas")
         .delete()
-        .eq("fecha", fechaSeleccionada)
-        .eq("recinto_id", RECINTO_ID)
-        .eq("cancha_id", celdaActiva.cancha_id)
-        .eq("horario_id", celdaActiva.horario_id);
+        .eq("id", agendaRow.id);
     }
 
-    // RESERVAR / BLOQUEAR
     if (estado === "reservada" || estado === "bloqueada") {
       const { data: agendaUpsert } = await supabase
         .from("agenda_canchas")
@@ -223,17 +238,17 @@ export default function Calendario() {
           { onConflict: "fecha,cancha_id,horario_id" }
         )
         .select()
-        .single();
+        .limit(1);
 
-      // 👇 ABONO SIEMPRE NUMÉRICO, DEFAULT 0
+      const agendaFinal = agendaUpsert?.[0];
       const abonoNum = Number(abono) >= 0 ? Number(abono) : 0;
 
-      if (estado === "reservada" && agendaUpsert?.id) {
+      if (estado === "reservada" && agendaFinal?.id) {
         await supabase
           .from("pagos_reservas")
           .upsert(
             {
-              agenda_cancha_id: agendaUpsert.id,
+              agenda_cancha_id: agendaFinal.id,
               monto_abonado: abonoNum,
               monto_total: 0,
               estado_pago: abonoNum > 0 ? "abonado" : "por_pagar",
@@ -245,10 +260,11 @@ export default function Calendario() {
 
     setCeldaActiva(null);
     setNombreCliente("");
-    setAbono("0"); // 👈 RESETEA A 0
+    setAbono("0");
     setPrecioMaximo(null);
     setErrorNombre(false);
     setErrorAbono(false);
+    setErrorLiberarPagado(false);
     cargarAgenda();
   };
 
@@ -268,14 +284,16 @@ export default function Calendario() {
           {diasSemana.map((d, i) => {
             const iso = toISO(d);
             const activo = iso === fechaSeleccionada;
+            const esPasado = iso < hoyISO;
 
             return (
               <button
                 key={i}
-                onClick={() => setFechaSeleccionada(iso)}
+                onClick={() => !esPasado && setFechaSeleccionada(iso)}
+                disabled={esPasado}
                 className={`px-3 py-2 rounded-lg border ${
                   activo ? "bg-black text-white" : "bg-white"
-                }`}
+                } ${esPasado ? "opacity-40 cursor-not-allowed" : ""}`}
               >
                 <div>{DIAS[i]}</div>
                 <div className="text-xs">
@@ -311,11 +329,18 @@ export default function Calendario() {
                 return (
                   <td
                     key={`${c.id}_${h.id}`}
-                    className="p-2 border text-center cursor-pointer"
+                    className={`p-2 border text-center ${
+                      fechaSeleccionada < hoyISO
+                        ? "opacity-40 cursor-not-allowed"
+                        : "cursor-pointer"
+                    }`}
                     onClick={() => {
+                      if (fechaSeleccionada < hoyISO) return;
+
                       setCeldaActiva({ cancha_id: c.id, horario_id: h.id, hora: h.hora });
                       setErrorNombre(false);
                       setErrorAbono(false);
+                      setErrorLiberarPagado(false);
                       setAbono("0");
 
                       const max = calcularPrecioMaximo(fechaSeleccionada, h.hora);
@@ -419,6 +444,12 @@ export default function Calendario() {
               </button>
             </div>
 
+            {errorLiberarPagado && (
+              <p className="text-red-600 text-sm mt-2 text-center">
+                Esta reserva está <strong>pagada</strong> y no puede modificarse desde el calendario.
+              </p>
+            )}
+
             <button
               className="w-full border py-2 rounded mb-2"
               onClick={() => aplicarEstado("disponible")}
@@ -428,7 +459,10 @@ export default function Calendario() {
 
             <button
               className="w-full text-sm text-gray-500"
-              onClick={() => setCeldaActiva(null)}
+              onClick={() => {
+                setCeldaActiva(null);
+                setErrorLiberarPagado(false);
+              }}
             >
               Cancelar
             </button>
