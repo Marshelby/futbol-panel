@@ -1,45 +1,37 @@
-import { useEffect, useState } from "react"
-import { supabase } from "../lib/supabase"
-import { useNavigate } from "react-router-dom"
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 
 export default function Login() {
-  const navigate = useNavigate()
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
+  const navigate = useNavigate();
+  const { login, isAuthenticated, loading: authLoading } = useAuth();
 
-  // ✅ Si ya hay sesión activa, entra directo al panel
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  // 🔒 Si ya hay sesión activa, ir directo al panel
   useEffect(() => {
-    const checkSession = async () => {
-      const { data } = await supabase.auth.getSession()
-      if (data?.session) {
-        navigate("/app", { replace: true })
-      }
+    if (isAuthenticated && !authLoading) {
+      navigate("/dashboard", { replace: true });
     }
-    checkSession()
-  }, [navigate])
+  }, [isAuthenticated, authLoading, navigate]);
 
-  const handleLogin = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    setError(null)
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-
-    setLoading(false)
-
-    if (error) {
-      setError(error.message)
-      return
+    try {
+      await login(email, password);
+      navigate("/dashboard", { replace: true });
+    } catch (err) {
+      setError(err.message || "Error al iniciar sesión");
+    } finally {
+      setLoading(false);
     }
-
-    // ✅ Ruta real del panel
-    navigate("/app", { replace: true })
-  }
+  };
 
   return (
     <div
@@ -63,18 +55,18 @@ export default function Login() {
         }}
       >
         <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800 }}>
-          BarberPanel
+          FutbolPanel
         </h1>
         <p style={{ marginTop: 6, marginBottom: 18, color: "#666" }}>
-          Inicia sesión para entrar al panel
+          Inicia sesión para administrar tu recinto
         </p>
 
-        <form onSubmit={handleLogin}>
+        <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: 12 }}>
             <label style={{ fontSize: 12, color: "#666" }}>Correo</label>
             <input
               type="email"
-              placeholder="correo@barberia.cl"
+              placeholder="correo@recinto.cl"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -108,7 +100,7 @@ export default function Login() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || authLoading}
             style={{
               width: "100%",
               padding: 12,
@@ -132,5 +124,5 @@ export default function Login() {
         </form>
       </div>
     </div>
-  )
+  );
 }

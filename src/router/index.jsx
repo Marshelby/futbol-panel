@@ -1,48 +1,74 @@
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 
-// layouts
-import OwnerLayout from "../layouts/OwnerLayout";
+/* layouts */
+import PublicLayout from "../components/layout/PublicLayout";
+import PrivateLayout from "../components/layout/PrivateLayout";
 
-// páginas privadas
-import Dashboard from "../pages/Dashboard";
-import Barberos from "../pages/Barberos";
-import EstadoDiario from "../pages/EstadoDiario";
-import Contabilidad from "../pages/Contabilidad";
-import RegistrarCorte from "../pages/RegistrarCorte";
-import OrdenBarberos from "../pages/OrdenBarberos";
-import AgendaDelDia from "../pages/AgendaDelDia";
-
-// públicas
+/* pages */
 import Login from "../pages/Login";
-import EstadoPublico from "../pages/EstadoPublico";
+import Dashboard from "../pages/Dashboard";
+import Reservas from "../pages/Reservas";
+import Calendario from "../pages/Calendario";
+import Contabilidad from "../pages/Contabilidad"; // ✅ NUEVO
+import Conversaciones from "../pages/Conversaciones";
+import Configuracion from "../pages/Configuracion";
+
+/* public pages */
+import RecintoPublico from "../pages/public/RecintoPublico";
 
 const router = createBrowserRouter([
-  // 🔓 LOGIN PÚBLICO
+  /* ---------- ROOT ---------- */
   {
     path: "/",
+    element: <Navigate to="/login" replace />,
+  },
+
+  /* ---------- AUTH ---------- */
+  {
+    path: "/login",
     element: <Login />,
   },
 
-  // 🔒 PANEL PRIVADO
+  /* ---------- PUBLIC ---------- */
   {
-    path: "/app",
-    element: <OwnerLayout />,
+    element: <PublicLayout />,
     children: [
-      { index: true, element: <Dashboard /> },
-      { path: "dashboard", element: <Dashboard /> },
-      { path: "barberos", element: <Barberos /> },
-      { path: "estado-diario", element: <EstadoDiario /> },
-      { path: "agenda-del-dia", element: <AgendaDelDia /> },
-      { path: "contabilidad", element: <Contabilidad /> },
-      { path: "registrar-corte", element: <RegistrarCorte /> },
-      { path: "orden-barberos", element: <OrdenBarberos /> },
+      {
+        path: "/:slug",
+        element: <RecintoPublico />,
+      },
     ],
   },
 
-  // 🌍 ESTADO PÚBLICO
+  /* ---------- PRIVATE ---------- */
   {
-    path: "/estado-barberia",
-    element: <EstadoPublico />,
+    element: <PrivateLayout />,
+    children: [
+      {
+        path: "/dashboard",
+        element: <Dashboard />,
+      },
+      {
+        path: "/reservas",
+        element: <Reservas />,
+      },
+      {
+        path: "/calendario",
+        element: <Calendario />,
+      },
+      {
+        path: "/contabilidad", // ✅ NUEVO
+        element: <Contabilidad />,
+      },
+      {
+        path: "/conversaciones",
+        element: <Conversaciones />,
+      },
+      {
+        path: "/configuracion",
+        element: <Configuracion />,
+      },
+    ],
   },
 ]);
 

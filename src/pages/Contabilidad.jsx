@@ -2,273 +2,198 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 export default function Contabilidad() {
-  const [fecha, setFecha] = useState(() =>
-    new Date().toISOString().slice(0, 10)
-  );
+  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [modo, setModo] = useState("dia");
-  const [barberoFiltro, setBarberoFiltro] = useState("todos");
-
-  const [cortes, setCortes] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [topBarberos, setTopBarberos] = useState([]);
-  const [resumenBarberos, setResumenBarberos] = useState([]);
+  const [registros, setRegistros] = useState([]);
+  const [rankingCanchas, setRankingCanchas] = useState([]);
 
   useEffect(() => {
-    fetchCortes();
+    fetchData();
     // eslint-disable-next-line
   }, [fecha, modo]);
 
   /* =========================
-     FECHAS (robusto)
+     RANGOS DE FECHA
   ========================= */
-  function getRangoDiaISO(yyyy_mm_dd) {
-    const start = new Date(`${yyyy_mm_dd}T00:00:00`);
-    const end = new Date(`${yyyy_mm_dd}T23:59:59.999`);
-    return { inicio: start.toISOString(), fin: end.toISOString() };
+  function rangoDia(fechaISO) {
+    return { inicio: fechaISO, fin: fechaISO };
   }
 
-  function getRangoMesISO(yyyy_mm_dd) {
-    const f = new Date(`${yyyy_mm_dd}T00:00:00`);
-    const year = f.getFullYear();
-    const monthIndex = f.getMonth();
-
-    const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
-    const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
-
-    return {
-      inicio: start.toISOString(),
-      fin: end.toISOString(),
-      year,
-      monthIndex,
-    };
+  function rangoMes(fechaISO) {
+    const d = new Date(fechaISO);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const inicio = new Date(y, m, 1).toISOString().slice(0, 10);
+    const fin = new Date(y, m + 1, 0).toISOString().slice(0, 10);
+    return { inicio, fin };
   }
 
   /* =========================
-     HELPERS: MAP BARBEROS
+     FETCH PRINCIPAL
   ========================= */
-  async function getBarberosMap() {
-    const { data, error } = await supabase
-      .from("barberos")
-      .select("id, nombre");
-
-    if (error) throw error;
-
-    const map = {};
-    (data || []).forEach((b) => {
-      map[b.id] = b.nombre;
-    });
-    return map;
-  }
-
-  function attachBarberoNombre(lista, barberosMap) {
-    // Mantiene la forma esperada por el resto del archivo: c.barberos.nombre
-    return (lista || []).map((c) => ({
-      ...c,
-      barberos: { nombre: barberosMap[c.barbero_id] || "Sin nombre" },
-    }));
-  }
-
-  /* =========================
-     DATA
-  ========================= */
-  async function fetchCortes() {
+  async function fetchData() {
     setLoading(true);
 
-    const hoyLocal = new Date().toLocaleDateString("en-CA");
+    const { inicio, fin } = modo === "dia" ? rangoDia(fecha) : rangoMes(fecha);
 
     try {
-      // Cargamos el mapa de barberos 1 vez por fetch
-      const barberosMap = await getBarberosMap();
+      /* 1️⃣ PAGOS */
+      const { data: pagos, error: pagosError } = await supabase
+        .from("pagos_reservas")
+        .select("id, agenda_cancha_id, monto_total, monto_abonado, estado_pago");
 
-      // ======================
-      // MODO DÍA
-      // ======================
-      if (modo === "dia") {
-        const { inicio, fin } = getRangoDiaISO(fecha);
+      if (pagosError) throw pagosError;
 
-        // hoy -> cortes (puede seguir usando relación, pero lo dejamos consistente)
-        if (fecha === hoyLocal) {
-          const { data, error } = await supabase
-            .from("cortes")
-            .select(`
-              id,
-              precio,
-              monto_barbero,
-              monto_barberia,
-              created_at,
-              barbero_id
-            `)
-            .gte("created_at", inicio)
-            .lte("created_at", fin)
-            .order("created_at", { ascending: true });
-
-          if (error) throw error;
-
-          const lista = attachBarberoNombre(data || [], barberosMap);
-          setCortes(lista);
-          recalcular(lista);
-          setLoading(false);
-          return;
-        }
-
-        // no-hoy -> cortes_historicos
-        const { data, error } = await supabase
-          .from("cortes_historicos")
-          .select(`
-            id,
-            precio,
-            monto_barbero,
-            monto_barberia,
-            created_at,
-            barbero_id
-          `)
-          .gte("created_at", inicio)
-          .lte("created_at", fin)
-          .order("created_at", { ascending: true });
-
-        if (error) throw error;
-
-        const lista = attachBarberoNombre(data || [], barberosMap);
-        setCortes(lista);
-        recalcular(lista);
+      if (!pagos || pagos.length === 0) {
+        setRegistros([]);
+        setRankingCanchas([]);
         setLoading(false);
         return;
       }
 
-      // ======================
-      // MODO MES
-      // ======================
-      const { inicio, fin, year, monthIndex } = getRangoMesISO(fecha);
+      /* 2️⃣ AGENDAS */
+      const agendaIds = pagos.map((p) => p.agenda_cancha_id);
 
-      // 1) Históricos del mes
-      const { data: historicos, error: errHist } = await supabase
-        .from("cortes_historicos")
-        .select(`
-          id,
-          precio,
-          monto_barbero,
-          monto_barberia,
-          created_at,
-          barbero_id
-        `)
-        .gte("created_at", inicio)
-        .lte("created_at", fin);
+      const { data: agendas, error: agendaError } = await supabase
+        .from("agenda_canchas")
+        .select("id, fecha, cancha_id, horario_id")
+        .in("id", agendaIds)
+        .gte("fecha", inicio)
+        .lte("fecha", fin);
 
-      if (errHist) throw errHist;
+      if (agendaError) throw agendaError;
 
-      let listaFinal = attachBarberoNombre(historicos || [], barberosMap);
-
-      // 2) Si el mes seleccionado es el mes actual -> sumar cortes (hoy)
-      const now = new Date();
-      const esMesActual =
-        now.getFullYear() === year && now.getMonth() === monthIndex;
-
-      if (esMesActual) {
-        const { data: hoyData, error: errHoy } = await supabase
-          .from("cortes")
-          .select(`
-            id,
-            precio,
-            monto_barbero,
-            monto_barberia,
-            created_at,
-            barbero_id
-          `);
-
-        if (errHoy) throw errHoy;
-
-        const hoyAdj = attachBarberoNombre(hoyData || [], barberosMap);
-        listaFinal = [...listaFinal, ...hoyAdj];
+      if (!agendas || agendas.length === 0) {
+        setRegistros([]);
+        setRankingCanchas([]);
+        setLoading(false);
+        return;
       }
 
-      listaFinal.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      /* 3️⃣ HORARIOS */
+      const horarioIds = Array.from(
+        new Set(agendas.map((a) => a.horario_id).filter(Boolean))
+      );
 
-      setCortes(listaFinal);
-      recalcular(listaFinal);
-    } catch (error) {
-      console.error("Error contabilidad:", error);
-      setCortes([]);
-      setTopBarberos([]);
-      setResumenBarberos([]);
+      let horariosMap = {};
+      if (horarioIds.length > 0) {
+        const { data: horarios, error: horariosError } = await supabase
+          .from("horarios_base")
+          .select("id, hora")
+          .in("id", horarioIds);
+
+        if (horariosError) throw horariosError;
+
+        horariosMap = horarios.reduce((acc, h) => {
+          acc[h.id] = h.hora;
+          return acc;
+        }, {});
+      }
+
+      /* 4️⃣ CANCHAS (NOMBRE REAL) */
+      const canchaIds = Array.from(
+        new Set(agendas.map((a) => a.cancha_id).filter(Boolean))
+      );
+
+      let canchasMap = {};
+      if (canchaIds.length > 0) {
+        const { data: canchas, error: canchasError } = await supabase
+          .from("canchas")
+          .select("id, nombre")
+          .in("id", canchaIds);
+
+        if (canchasError) throw canchasError;
+
+        canchasMap = canchas.reduce((acc, c) => {
+          acc[c.id] = c.nombre;
+          return acc;
+        }, {});
+      }
+
+      /* 5️⃣ MAP AGENDAS */
+      const agendaMap = agendas.reduce((acc, a) => {
+        acc[a.id] = {
+          ...a,
+          hora: horariosMap[a.horario_id] ?? null,
+          cancha_nombre: canchasMap[a.cancha_id] ?? "Cancha",
+        };
+        return acc;
+      }, {});
+
+      /* 6️⃣ MERGE FINAL */
+      const registrosFinales = pagos
+        .filter((p) => agendaMap[p.agenda_cancha_id])
+        .map((p) => ({
+          ...p,
+          agenda: agendaMap[p.agenda_cancha_id],
+        }))
+        .sort((a, b) => {
+          if (a.agenda.fecha !== b.agenda.fecha) {
+            return a.agenda.fecha.localeCompare(b.agenda.fecha);
+          }
+          return String(a.agenda.hora || "").localeCompare(
+            String(b.agenda.hora || "")
+          );
+        });
+
+      setRegistros(registrosFinales);
+      calcularRanking(registrosFinales);
+    } catch (err) {
+      console.error("Error contabilidad:", err);
+      setRegistros([]);
+      setRankingCanchas([]);
     }
 
     setLoading(false);
   }
 
   /* =========================
-     FILTRO
+     TOTALES
   ========================= */
-  const cortesFiltrados = useMemo(() => {
-    if (barberoFiltro === "todos") return cortes;
-    return cortes.filter((c) => c.barberos?.nombre === barberoFiltro);
-  }, [cortes, barberoFiltro]);
+  const totales = useMemo(() => {
+    let generado = 0;
+    let abonado = 0;
 
-  /* =========================
-     CÁLCULOS
-  ========================= */
-  function recalcular(lista) {
-    calcularTopBarberos(lista);
-    calcularResumenBarberos(lista);
-  }
-
-  function calcularTopBarberos(lista) {
-    const acc = {};
-    lista.forEach((c) => {
-      const nombre = c.barberos?.nombre || "Sin nombre";
-      const precio = Number(c.precio || 0);
-      if (!acc[nombre]) acc[nombre] = { nombre, total: 0 };
-      acc[nombre].total += precio;
+    registros.forEach((r) => {
+      generado += Number(r.monto_total || 0);
+      abonado += Number(r.monto_abonado || 0);
     });
 
-    setTopBarberos(
-      Object.values(acc).sort((a, b) => b.total - a.total).slice(0, 3)
+    return {
+      generado,
+      abonado,
+      pendiente: generado - abonado,
+    };
+  }, [registros]);
+
+  /* =========================
+     RANKING
+  ========================= */
+  function calcularRanking(lista) {
+    const acc = {};
+
+    lista.forEach((r) => {
+      const nombre = r.agenda?.cancha_nombre ?? "Cancha";
+      if (!acc[nombre]) acc[nombre] = { nombre, total: 0 };
+      acc[nombre].total += Number(r.monto_total || 0);
+    });
+
+    setRankingCanchas(
+      Object.values(acc).sort((a, b) => b.total - a.total)
     );
   }
 
-  function calcularResumenBarberos(lista) {
-    const acc = {};
-    lista.forEach((c) => {
-      const nombre = c.barberos?.nombre || "Sin nombre";
-      if (!acc[nombre]) {
-        acc[nombre] = { nombre, cortes: 0, ganado: 0, generado: 0 };
-      }
-      acc[nombre].cortes += 1;
-      acc[nombre].ganado += Number(c.monto_barbero || 0);
-      acc[nombre].generado += Number(c.precio || 0);
-    });
-
-    setResumenBarberos(Object.values(acc).sort((a, b) => b.ganado - a.ganado));
-  }
-
-  const barberosDisponibles = useMemo(() => {
-    const set = new Set();
-    cortes.forEach((c) => c.barberos?.nombre && set.add(c.barberos.nombre));
-    return Array.from(set).sort();
-  }, [cortes]);
-
-  const totalIngresos = useMemo(
-    () => cortesFiltrados.reduce((a, c) => a + (c.precio || 0), 0),
-    [cortesFiltrados]
-  );
-  const totalBarberos = useMemo(
-    () => cortesFiltrados.reduce((a, c) => a + (c.monto_barbero || 0), 0),
-    [cortesFiltrados]
-  );
-  const totalLocal = useMemo(
-    () => cortesFiltrados.reduce((a, c) => a + (c.monto_barberia || 0), 0),
-    [cortesFiltrados]
-  );
-
   /* =========================
-     UI (sin cambios)
+     UI
   ========================= */
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-semibold">Contabilidad</h2>
 
-      <div className="flex flex-wrap gap-6 items-start">
-        <Box>
+      <div className="flex gap-6 items-end">
+        <div>
           <label className="label">Fecha</label>
           <input
             type="date"
@@ -276,9 +201,9 @@ export default function Contabilidad() {
             onChange={(e) => setFecha(e.target.value)}
             className="input"
           />
-        </Box>
+        </div>
 
-        <Box>
+        <div>
           <p className="label mb-2">Vista</p>
           <div className="flex gap-2">
             <Toggle active={modo === "dia"} onClick={() => setModo("dia")}>
@@ -288,127 +213,86 @@ export default function Contabilidad() {
               Mes
             </Toggle>
           </div>
-        </Box>
-
-        <Box>
-          <label className="label">Barbero</label>
-          <select
-            value={barberoFiltro}
-            onChange={(e) => setBarberoFiltro(e.target.value)}
-            className="input"
-          >
-            <option value="todos">Todos</option>
-            {barberosDisponibles.map((b) => (
-              <option key={b}>{b}</option>
-            ))}
-          </select>
-        </Box>
-
-        {barberoFiltro === "todos" && topBarberos.length > 0 && (
-          <Box className="border-zinc-400">
-            <p className="text-sm mb-2">🏆 Barberos del {modo}</p>
-            <ul className="text-sm space-y-1">
-              {topBarberos.map((b, i) => (
-                <li key={b.nombre} className={i === 0 ? "font-semibold" : ""}>
-                  {i + 1}. {b.nombre} — ${b.total.toLocaleString()}
-                </li>
-              ))}
-            </ul>
-          </Box>
-        )}
+        </div>
       </div>
 
       {loading ? (
         <p>Cargando…</p>
       ) : (
         <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Stat label="Total generado" value={totales.generado} />
+            <Stat label="Total abonado" value={totales.abonado} />
+            <Stat label="Pendiente" value={totales.pendiente} />
+          </div>
+
           <div className="bg-white border border-black rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-zinc-100 border-b border-black">
                 <tr>
-                  <th className="th text-left">Hora</th>
-                  <th className="th text-left">Barbero</th>
-                  <th className="th text-right">Precio</th>
-                  <th className="th text-right">Barbero</th>
-                  <th className="th text-right">Local</th>
+                  <th className="th">Fecha</th>
+                  <th className="th">Hora</th>
+                  <th className="th">Cancha</th>
+                  <th className="th text-right">Total</th>
+                  <th className="th text-right">Abonado</th>
+                  <th className="th text-right">Estado</th>
                 </tr>
               </thead>
               <tbody>
-                {cortesFiltrados.map((c, i) => (
-                  <tr
-                    key={c.id}
-                    className={`border-t border-zinc-300 ${
-                      i % 2 === 0 ? "bg-white" : "bg-zinc-50"
-                    }`}
-                  >
+                {registros.map((r) => (
+                  <tr key={r.id} className="border-t">
+                    <td className="td">{r.agenda.fecha}</td>
                     <td className="td">
-                      {new Date(c.created_at).toLocaleString("es-CL")}
+                      {r.agenda.hora?.slice(0, 5) ?? "-"}
                     </td>
-                    <td className="td">{c.barberos?.nombre}</td>
-                    <td className="td text-right">${c.precio}</td>
-                    <td className="td text-right">${c.monto_barbero}</td>
-                    <td className="td text-right">${c.monto_barberia}</td>
+                    <td className="td">{r.agenda.cancha_nombre}</td>
+                    <td className="td text-right">
+                      ${Number(r.monto_total).toLocaleString()}
+                    </td>
+                    <td className="td text-right">
+                      ${Number(r.monto_abonado).toLocaleString()}
+                    </td>
+                    <td className="td text-right">{r.estado_pago}</td>
                   </tr>
                 ))}
+
+                {registros.length === 0 && (
+                  <tr>
+                    <td className="td" colSpan={6}>
+                      No hay registros.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Stat label="Total ingresos" value={totalIngresos} />
-            <Stat label="Total barberos" value={totalBarberos} />
-            <Stat label="Total local" value={totalLocal} />
+          <div className="bg-white border border-black rounded-lg p-5">
+            <h3 className="font-semibold mb-3">🏟️ Ranking de canchas</h3>
+            <ul className="space-y-1 text-sm">
+              {rankingCanchas.map((c, i) => (
+                <li key={c.nombre}>
+                  {i + 1}. {c.nombre} — $
+                  {Number(c.total).toLocaleString()}
+                </li>
+              ))}
+            </ul>
           </div>
-
-          {barberoFiltro === "todos" && (
-            <div className="bg-white border border-black rounded-lg p-5">
-              <h3 className="text-lg font-semibold mb-4">
-                ✂️ Cortes por barbero
-              </h3>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {resumenBarberos.map((b) => (
-                  <div
-                    key={b.nombre}
-                    className="border border-black rounded-lg p-4 bg-zinc-50"
-                  >
-                    <p className="font-semibold text-lg">{b.nombre}</p>
-                    <p>
-                      Cortes: <strong>{b.cortes}</strong>
-                    </p>
-                    <p>
-                      Ganó: <strong>${b.ganado.toLocaleString()}</strong>
-                    </p>
-                    <p>
-                      Generó: <strong>${b.generado.toLocaleString()}</strong>
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>
   );
 }
 
-function Box({ children, className = "" }) {
-  return (
-    <div className={`bg-white border border-black rounded-lg p-4 ${className}`}>
-      {children}
-    </div>
-  );
-}
-
+/* =========================
+   UI HELPERS
+========================= */
 function Toggle({ active, children, onClick }) {
   return (
     <button
       onClick={onClick}
       className={`px-3 py-1 rounded border ${
-        active
-          ? "bg-black text-white border-black"
-          : "bg-zinc-100 border-zinc-400"
+        active ? "bg-black text-white" : "bg-zinc-100"
       }`}
     >
       {children}
