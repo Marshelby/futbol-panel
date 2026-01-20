@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../hooks/useAuth";
 
 export default function Contabilidad() {
+  const { recinto } = useAuth();
+  const recintoId = recinto?.id;
+
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [modo, setModo] = useState("dia");
   const [loading, setLoading] = useState(true);
@@ -12,7 +16,7 @@ export default function Contabilidad() {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line
-  }, [fecha, modo]);
+  }, [fecha, modo, recintoId]);
 
   function rangoDia(fechaISO) {
     return { inicio: fechaISO, fin: fechaISO };
@@ -29,6 +33,7 @@ export default function Contabilidad() {
   }
 
   async function fetchData() {
+    if (!recintoId) return;
     setLoading(true);
     const { inicio, fin } = modo === "dia" ? rangoDia(fecha) : rangoMes(fecha);
 
@@ -49,6 +54,7 @@ export default function Contabilidad() {
       const { data: agendas } = await supabase
         .from("agenda_canchas")
         .select("id, fecha, cancha_id, horario_id")
+        .eq("recinto_id", recintoId)
         .in("id", agendaIds)
         .gte("fecha", inicio)
         .lte("fecha", fin);

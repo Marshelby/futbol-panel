@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 const AuthContext = createContext(null);
@@ -8,36 +8,61 @@ export const AuthProvider = ({ children }) => {
   const [recinto, setRecinto] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Obtener sesión inicial
-  useEffect(() => {
-    const getSession = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+  const loadSessionAndRecinto = async () => {
+    setLoading(true);
 
-      setUser(session?.user ?? null);
+    // 1️⃣ Obtener sesión
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    const currentUser = session?.user ?? null;
+    setUser(currentUser);
+
+    if (!currentUser) {
+      setRecinto(null);
       setLoading(false);
-    };
+      return;
+    }
 
-    getSession();
+    // 2️⃣ Obtener recinto por owner_user_id (modelo correcto)
+    const { data, error } = await supabase
+      .from("recintos")
+      .select("*")
+      .eq("owner_user_id", currentUser.id)
+      .limit(1)
+      .single();
 
-    // Escuchar cambios de sesión
+    if (error || !data) {
+      console.error("Error cargando recinto:", error);
+      setRecinto(null);
+      setLoading(false);
+      return;
+    }
+
+    setRecinto(data);
+    setLoading(false);
+  };
+
+  // 3️⃣ Carga inicial + listener auth
+  useEffect(() => {
+    loadSessionAndRecinto();
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    } = supabase.auth.onAuthStateChange(() => {
+      loadSessionAndRecinto();
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
   const login = async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
     if (error) throw error;
-    setUser(data.user);
   };
 
   const logout = async () => {
@@ -46,17 +71,20 @@ export const AuthProvider = ({ children }) => {
     setRecinto(null);
   };
 
-  const value = {
-    user,
-    recinto,
-    setRecinto,
-    login,
-    logout,
-    loading,
-    isAuthenticated: !!user,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        recinto, // ← SIEMPRE viene de DB
+        loading,
+        login,
+        logout,
+        isAuthenticated: !!user,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 };
 
-export const AuthContextInstance = AuthContext;
+export default AuthContext;

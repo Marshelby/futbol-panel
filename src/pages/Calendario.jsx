@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
-
-/* =========================
-   CONFIG
-========================= */
-const RECINTO_ID = "7815073b-e90a-4c19-b5da-9ba5a6e7c848";
+import { useAuth } from "../hooks/useAuth";
 
 /* =========================
    FECHAS
@@ -37,6 +33,9 @@ const dayToDiasSemana = (jsDate) => {
 };
 
 export default function Calendario() {
+  const { recinto } = useAuth();
+  const recintoId = recinto?.id;
+
   const hoy = new Date();
   const hoyISO = toISO(hoy);
 
@@ -63,6 +62,8 @@ export default function Calendario() {
      CARGA BASE
   ========================= */
   useEffect(() => {
+    if (!recintoId) return;
+
     const cargarBase = async () => {
       setLoading(true);
 
@@ -72,7 +73,7 @@ export default function Calendario() {
             .from("canchas")
             .select("id, nombre")
             .eq("activa", true)
-            .eq("recinto_id", RECINTO_ID)
+            .eq("recinto_id", recintoId)
             .order("nombre"),
 
           supabase
@@ -84,7 +85,7 @@ export default function Calendario() {
           supabase
             .from("precios_cancha")
             .select("hora_inicio, hora_fin, dias_semana, precio")
-            .eq("recinto_id", RECINTO_ID),
+            .eq("recinto_id", recintoId),
         ]);
 
       setCanchas(canchasData || []);
@@ -94,19 +95,20 @@ export default function Calendario() {
     };
 
     cargarBase();
-  }, []);
+  }, [recintoId]);
 
   /* =========================
      AGENDA
   ========================= */
   const cargarAgenda = async () => {
+    if (!recintoId) return;
     const inicio = toISO(inicioSemana);
     const fin = toISO(addDays(inicioSemana, 6));
 
     const { data } = await supabase
       .from("agenda_canchas")
       .select("id, cancha_id, horario_id, estado, nombre_cliente, fecha")
-      .eq("recinto_id", RECINTO_ID)
+      .eq("recinto_id", recintoId)
       .gte("fecha", inicio)
       .lte("fecha", fin);
 
@@ -115,7 +117,7 @@ export default function Calendario() {
 
   useEffect(() => {
     cargarAgenda();
-  }, [inicioSemana]);
+  }, [inicioSemana, recintoId]);
 
   /* =========================
      MAPA
@@ -188,7 +190,7 @@ export default function Calendario() {
       .from("agenda_canchas")
       .select("id")
       .eq("fecha", fechaSeleccionada)
-      .eq("recinto_id", RECINTO_ID)
+      .eq("recinto_id", recintoId)
       .eq("cancha_id", celdaActiva.cancha_id)
       .eq("horario_id", celdaActiva.horario_id)
       .limit(1);
@@ -227,7 +229,7 @@ export default function Calendario() {
         .from("agenda_canchas")
         .upsert(
           {
-            recinto_id: RECINTO_ID,
+            recinto_id: recintoId,
             fecha: fechaSeleccionada,
             cancha_id: celdaActiva.cancha_id,
             horario_id: celdaActiva.horario_id,

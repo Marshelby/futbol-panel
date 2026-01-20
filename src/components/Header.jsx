@@ -1,24 +1,12 @@
-import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
-
-const RECINTO_ID = "7815073b-e90a-4c19-b5da-9ba5a6e7c848";
+import { useState } from "react";
+import { useAuth } from "../hooks/useAuth";
 
 export default function Header() {
-  const [userEmail, setUserEmail] = useState("Administrador/a");
+  const { user, recinto, logout } = useAuth();
+  const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    const getUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user?.email) {
-        setUserEmail(user.email);
-      }
-    };
-
-    getUser();
-  }, []);
+  const userEmail = user?.email || "Administrador/a";
+  const recintoNombre = recinto?.nombre || "Sin recinto";
 
   return (
     <header
@@ -30,68 +18,111 @@ export default function Header() {
         justifyContent: "space-between",
         padding: "0 24px",
         boxSizing: "border-box",
+        position: "sticky",
+        top: 0,
+        zIndex: 1000,
       }}
     >
-      {/* IZQUIERDA: NOMBRE + PELOTA */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "14px",
-        }}
-      >
+      {/* IZQUIERDA */}
+      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
         <span
           style={{
             color: "#fff",
-            fontSize: "56px", // CASI ALTURA COMPLETA DEL HEADER
-            fontWeight: "800",
-            letterSpacing: "2px",
-            lineHeight: "1",
-            textTransform: "uppercase",
+            fontSize: "40px",
+            fontWeight: "400",
+            letterSpacing: "0.5px",
             fontFamily:
               "'Inter', 'Helvetica Neue', Arial, sans-serif",
             userSelect: "none",
+            lineHeight: "1",
           }}
         >
-          MATI14
+          {recintoNombre}
         </span>
 
-        <img
-          src="/ball.png"
-          alt="Fútbol"
+        <span
           style={{
-            height: "44px",
-            width: "44px",
-            objectFit: "contain",
+            color: "#fff",
+            fontSize: "18px",
+            fontWeight: "500",
+            letterSpacing: "0.5px",
+            textTransform: "uppercase",
+            opacity: 0.9,
           }}
-        />
+        >
+          fútbol
+        </span>
       </div>
 
-      {/* DERECHA: USUARIO */}
+      {/* DERECHA */}
       <div
         style={{
+          position: "relative",
           display: "flex",
           alignItems: "center",
           gap: "10px",
           color: "#fff",
-          fontSize: "14px",
         }}
       >
+        {/* CLICK + HOVER AREA */}
         <div
+          onClick={() => setOpen((prev) => !prev)}
           style={{
-            width: "32px",
-            height: "32px",
-            borderRadius: "50%",
-            backgroundColor: "#222",
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
-            fontWeight: "700",
+            gap: "10px",
+            cursor: "pointer",
+            transition: "transform 0.2s ease, opacity 0.2s ease",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.opacity = "0.85";
+            e.currentTarget.style.transform = "translateY(-1px)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.opacity = "1";
+            e.currentTarget.style.transform = "translateY(0)";
           }}
         >
-          {userEmail.charAt(0).toUpperCase()}
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              borderRadius: "50%",
+              backgroundColor: "#222",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: "600",
+            }}
+          >
+            {userEmail.charAt(0).toUpperCase()}
+          </div>
+
+          <span>{userEmail}</span>
         </div>
-        <span>{userEmail}</span>
+
+        {/* DROPDOWN */}
+        {open && (
+          <div
+            style={{
+              position: "absolute",
+              top: "100%",
+              right: 0,
+              marginTop: "8px",
+              backgroundColor: "#111",
+              border: "1px solid #222",
+              borderRadius: "6px",
+              padding: "8px 14px",
+              fontSize: "13px",
+              color: "#fff",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+            onClick={logout}
+          >
+            Cerrar sesión
+          </div>
+        )}
       </div>
     </header>
   );

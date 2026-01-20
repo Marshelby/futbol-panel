@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
-
-/* =========================
-   CONFIG
-========================= */
-const RECINTO_ID = "7815073b-e90a-4c19-b5da-9ba5a6e7c848";
+import { useAuth } from "../hooks/useAuth";
 
 /* =========================
    FECHAS
@@ -41,6 +37,9 @@ const formatCLP = (n) =>
   new Intl.NumberFormat("es-CL", { maximumFractionDigits: 0 }).format(Number(n || 0));
 
 export default function Reservas() {
+  const { recinto } = useAuth();
+  const recintoId = recinto?.id;
+
   const hoy = new Date();
   const hoyISO = toISO(hoy);
 
@@ -59,12 +58,14 @@ export default function Reservas() {
      CARGA BASE
   ========================= */
   useEffect(() => {
+    if (!recintoId) return;
+
     const cargarBase = async () => {
       const [{ data: canchasData }, { data: horasData }] = await Promise.all([
         supabase
           .from("canchas")
           .select("id, nombre")
-          .eq("recinto_id", RECINTO_ID)
+          .eq("recinto_id", recintoId)
           .eq("activa", true)
           .order("nombre"),
 
@@ -80,19 +81,20 @@ export default function Reservas() {
     };
 
     cargarBase();
-  }, []);
+  }, [recintoId]);
 
   /* =========================
      AGENDA + PAGOS
   ========================= */
   const cargarAgendaSemana = async (weekStart) => {
+    if (!recintoId) return;
     const inicio = toISO(weekStart);
     const fin = toISO(addDays(weekStart, 6));
 
     const { data: agendaData } = await supabase
       .from("agenda_canchas")
       .select("id, fecha, cancha_id, horario_id, nombre_cliente")
-      .eq("recinto_id", RECINTO_ID)
+      .eq("recinto_id", recintoId)
       .gte("fecha", inicio)
       .lte("fecha", fin);
 
@@ -113,7 +115,7 @@ export default function Reservas() {
 
   useEffect(() => {
     cargarAgendaSemana(inicioSemana);
-  }, [inicioSemana]);
+  }, [inicioSemana, recintoId]);
 
   /* =========================
      MAPAS
@@ -151,8 +153,10 @@ export default function Reservas() {
      PRECIO (RPC)
   ========================= */
   const obtenerPrecio = async ({ fecha, hora }) => {
+    if (!recintoId) return null;
+
     const { data, error } = await supabase.rpc("get_precio_cancha", {
-      p_recinto_id: RECINTO_ID,
+      p_recinto_id: recintoId,
       p_fecha: fecha,
       p_hora: hora,
     });
