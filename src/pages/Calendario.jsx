@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/useAuth";
 
 /* =========================
-   FECHAS
+   FECHAS (LOCAL, SIN UTC)
 ========================= */
 const DIAS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do"];
 const MESES = [
@@ -11,7 +11,8 @@ const MESES = [
   "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"
 ];
 
-const toISO = (d) => d.toISOString().split("T")[0];
+// 🔹 Fecha local YYYY-MM-DD (misma convención que Contabilidad)
+const toISO = (d) => d.toLocaleDateString("sv-SE");
 
 const startOfWeek = (date) => {
   const d = new Date(date);
@@ -98,7 +99,7 @@ export default function Calendario() {
   }, [recintoId]);
 
   /* =========================
-     AGENDA
+     AGENDA (solo agenda_canchas)
   ========================= */
   const cargarAgenda = async () => {
     if (!recintoId) return;
@@ -159,12 +160,11 @@ export default function Calendario() {
   };
 
   /* =========================
-     ACCIONES (FIX 406 + BLOQUEO PASADO)
+     ACCIONES (BLOQUEO PASADO)
   ========================= */
   const aplicarEstado = async (estado) => {
     if (!celdaActiva) return;
 
-    // 🔒 BLOQUEO DE DÍAS PASADOS
     if (fechaSeleccionada < hoyISO) {
       return;
     }

@@ -10,7 +10,7 @@ export default function Sidebar() {
           <span
             className="ball-spin"
             style={{
-              fontSize: "26px", // mismo peso visual que el texto
+              fontSize: "26px",
               lineHeight: "1",
               display: "inline-block",
             }}
@@ -31,6 +31,10 @@ export default function Sidebar() {
         <Item to="/reservas" label="Reservas" />
         <Item to="/calendario" label="Calendario" />
         <Item to="/contabilidad" label="Contabilidad" />
+
+        {/* NUEVO: CHAT BOT */}
+        <Item to="/chat-bot" label="Chat Bot" />
+
         <Item to="/configuracion" label="Configuración" />
       </nav>
 

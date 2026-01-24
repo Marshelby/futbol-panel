@@ -2,11 +2,20 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/useAuth";
 
+/* =========================
+   FECHA LOCAL ÚNICA
+   ========================= */
+function getTodayLocal() {
+  return new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD (hora local)
+}
+
 export default function Contabilidad() {
   const { recinto } = useAuth();
   const recintoId = recinto?.id;
 
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
+  const hoy = getTodayLocal();
+
+  const [fecha, setFecha] = useState(hoy);
   const [modo, setModo] = useState("dia");
   const [loading, setLoading] = useState(true);
 
@@ -23,96 +32,151 @@ export default function Contabilidad() {
   }
 
   function rangoMes(fechaISO) {
-    const d = new Date(fechaISO);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    return {
-      inicio: new Date(y, m, 1).toISOString().slice(0, 10),
-      fin: new Date(y, m + 1, 0).toISOString().slice(0, 10),
-    };
+    const [y, m] = fechaISO.split("-").map(Number);
+    const inicio = new Date(y, m - 1, 1).toLocaleDateString("sv-SE");
+    const fin = new Date(y, m, 0).toLocaleDateString("sv-SE");
+    return { inicio, fin };
+  }
+
+  async function fetchAgendaYPagos({ tablaAgenda, tablaPagos, inicio, fin }) {
+    const { data: agendas } = await supabase
+      .from(tablaAgenda)
+      .select("id, fecha, cancha_id, horario_id")
+      .eq("recinto_id", recintoId)
+      .gte("fecha", inicio)
+      .lte("fecha", fin);
+
+    if (!agendas?.length) return [];
+
+    const agendaIds = agendas.map((a) => a.id);
+
+    const { data: pagos } = await supabase
+      .from(tablaPagos)
+      .select("agenda_cancha_id, monto_total, monto_abonado, estado_pago")
+      .in("agenda_cancha_id", agendaIds);
+
+    if (!pagos?.length) return [];
+
+    const horarioIds = [...new Set(agendas.map((a) => a.horario_id))];
+    const { data: horarios } = await supabase
+      .from("horarios_base")
+      .select("id, hora")
+      .in("id", horarioIds);
+
+    const horariosMap = Object.fromEntries(
+      (horarios || []).map((h) => [h.id, h.hora])
+    );
+
+    const canchaIds = [...new Set(agendas.map((a) => a.cancha_id))];
+    const { data: canchas } = await supabase
+      .from("canchas")
+      .select("id, nombre")
+      .in("id", canchaIds);
+
+    const canchasMap = Object.fromEntries(
+      (canchas || []).map((c) => [c.id, c.nombre])
+    );
+
+    const agendaMap = Object.fromEntries(
+      agendas.map((a) => [
+        a.id,
+        {
+          ...a,
+          hora: horariosMap[a.horario_id],
+          cancha_nombre: canchasMap[a.cancha_id] ?? "Cancha",
+        },
+      ])
+    );
+
+    return pagos
+      .filter((p) => agendaMap[p.agenda_cancha_id])
+      .map((p) => ({
+        ...p,
+        agenda: agendaMap[p.agenda_cancha_id],
+      }));
   }
 
   async function fetchData() {
     if (!recintoId) return;
     setLoading(true);
+
     const { inicio, fin } = modo === "dia" ? rangoDia(fecha) : rangoMes(fecha);
+    let resultados = [];
 
     try {
-      const { data: pagos } = await supabase
-        .from("pagos_reservas")
-        .select("id, agenda_cancha_id, monto_total, monto_abonado, estado_pago");
+      if (modo === "dia") {
+        // ===== CAMBIO APLICADO =====
+        // El modo DÍA ahora consulta SIEMPRE:
+        // - agenda viva
+        // - agenda histórica
+        // y deduplica, mostrando el día seleccionado sin importar la fuente.
+        const partes = [
+          fetchAgendaYPagos({
+            tablaAgenda: "agenda_canchas",
+            tablaPagos: "pagos_reservas",
+            inicio,
+            fin,
+          }),
+          fetchAgendaYPagos({
+            tablaAgenda: "agenda_canchas_historico",
+            tablaPagos: "pagos_reservas_historico",
+            inicio,
+            fin,
+          }),
+        ];
 
-      if (!pagos?.length) {
-        setRegistros([]);
-        setRankingCanchas([]);
-        setLoading(false);
-        return;
-      }
+        const res = await Promise.all(partes);
+        const combinados = res.flat();
 
-      const agendaIds = pagos.map((p) => p.agenda_cancha_id);
+        const map = new Map();
+        combinados.forEach((r) => {
+          map.set(r.agenda.id, r);
+        });
 
-      const { data: agendas } = await supabase
-        .from("agenda_canchas")
-        .select("id, fecha, cancha_id, horario_id")
-        .eq("recinto_id", recintoId)
-        .in("id", agendaIds)
-        .gte("fecha", inicio)
-        .lte("fecha", fin);
+        resultados = Array.from(map.values());
+      } else {
+        // ===== MODO MES (ya existente) =====
+        const partes = [];
 
-      if (!agendas?.length) {
-        setRegistros([]);
-        setRankingCanchas([]);
-        setLoading(false);
-        return;
-      }
-
-      const horarioIds = [...new Set(agendas.map((a) => a.horario_id))];
-      const { data: horarios } = await supabase
-        .from("horarios_base")
-        .select("id, hora")
-        .in("id", horarioIds);
-
-      const horariosMap = Object.fromEntries(
-        (horarios || []).map((h) => [h.id, h.hora])
-      );
-
-      const canchaIds = [...new Set(agendas.map((a) => a.cancha_id))];
-      const { data: canchas } = await supabase
-        .from("canchas")
-        .select("id, nombre")
-        .in("id", canchaIds);
-
-      const canchasMap = Object.fromEntries(
-        (canchas || []).map((c) => [c.id, c.nombre])
-      );
-
-      const agendaMap = Object.fromEntries(
-        agendas.map((a) => [
-          a.id,
-          {
-            ...a,
-            hora: horariosMap[a.horario_id],
-            cancha_nombre: canchasMap[a.cancha_id] ?? "Cancha",
-          },
-        ])
-      );
-
-      const registrosFinales = pagos
-        .filter((p) => agendaMap[p.agenda_cancha_id])
-        .map((p) => ({
-          ...p,
-          agenda: agendaMap[p.agenda_cancha_id],
-        }))
-        .sort(
-          (a, b) =>
-            a.agenda.fecha.localeCompare(b.agenda.fecha) ||
-            String(a.agenda.hora || "").localeCompare(
-              String(b.agenda.hora || "")
-            )
+        partes.push(
+          fetchAgendaYPagos({
+            tablaAgenda: "agenda_canchas_historico",
+            tablaPagos: "pagos_reservas_historico",
+            inicio,
+            fin,
+          })
         );
 
-      setRegistros(registrosFinales);
-      calcularRanking(registrosFinales);
+        partes.push(
+          fetchAgendaYPagos({
+            tablaAgenda: "agenda_canchas",
+            tablaPagos: "pagos_reservas",
+            inicio,
+            fin,
+          })
+        );
+
+        const res = await Promise.all(partes);
+        const combinados = res.flat();
+
+        const map = new Map();
+        combinados.forEach((r) => {
+          map.set(r.agenda.id, r);
+        });
+
+        resultados = Array.from(map.values());
+      }
+
+      resultados.sort(
+        (a, b) =>
+          a.agenda.fecha.localeCompare(b.agenda.fecha) ||
+          String(a.agenda.hora || "").localeCompare(
+            String(b.agenda.hora || "")
+          )
+      );
+
+      setRegistros(resultados);
+      calcularRanking(resultados);
     } catch {
       setRegistros([]);
       setRankingCanchas([]);
@@ -155,7 +219,6 @@ export default function Contabilidad() {
     <div className="space-y-6">
       <h2 className="text-xl font-semibold">Contabilidad</h2>
 
-      {/* FILTROS + RANKING */}
       <div className="flex flex-wrap gap-6 items-start">
         <Box>
           <label className="label">Fecha</label>
@@ -181,11 +244,9 @@ export default function Contabilidad() {
 
         {rankingCanchas.length > 0 && (
           <Box className="min-w-[260px]">
-            {/* TÍTULO SUBRAYADO */}
             <p className="text-sm font-semibold pb-1 mb-2 border-b border-black">
               🏟️ Canchas del {modo}
             </p>
-
             <ul className="text-sm">
               {rankingCanchas.slice(0, 4).map((c, i) => (
                 <li
@@ -209,7 +270,6 @@ export default function Contabilidad() {
         <p>Cargando…</p>
       ) : (
         <>
-          {/* TABLA */}
           <Box className="p-0 overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-zinc-100 border-b border-black">
@@ -225,7 +285,7 @@ export default function Contabilidad() {
               <tbody>
                 {registros.map((r, i) => (
                   <tr
-                    key={r.id}
+                    key={`${r.agenda.id}-${i}`}
                     className={`border-t border-zinc-300 ${
                       i % 2 === 0 ? "bg-white" : "bg-zinc-50"
                     }`}
@@ -248,7 +308,6 @@ export default function Contabilidad() {
             </table>
           </Box>
 
-          {/* TOTALES */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Stat label="Total generado" value={totales.generado} />
             <Stat label="Total abonado" value={totales.abonado} />

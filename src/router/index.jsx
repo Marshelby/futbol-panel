@@ -9,7 +9,7 @@ import Login from "../pages/Login";
 import Dashboard from "../pages/Dashboard";
 import Reservas from "../pages/Reservas";
 import Calendario from "../pages/Calendario";
-import Contabilidad from "../pages/Contabilidad"; // ✅ NUEVO
+import Contabilidad from "../pages/Contabilidad";
 import Conversaciones from "../pages/Conversaciones";
 import Configuracion from "../pages/Configuracion";
 
@@ -57,11 +57,11 @@ const router = createBrowserRouter([
         element: <Calendario />,
       },
       {
-        path: "/contabilidad", // ✅ NUEVO
+        path: "/contabilidad",
         element: <Contabilidad />,
       },
       {
-        path: "/conversaciones",
+        path: "/chat-bot",
         element: <Conversaciones />,
       },
       {
