@@ -27,14 +27,15 @@ export default function Sidebar() {
 
       {/* NAV */}
       <nav className="flex-1 px-4 py-6 space-y-2">
-        <Item to="/" label="Inicio" />
+        <Item to="/dashboard" label="Inicio" />
         <Item to="/reservas" label="Reservas" />
         <Item to="/calendario" label="Calendario" />
+
+        {/* NUEVO: CRONOGRAMA */}
+        <Item to="/cronograma" label="Cronograma" />
+
         <Item to="/contabilidad" label="Contabilidad" />
-
-        {/* NUEVO: CHAT BOT */}
         <Item to="/chat-bot" label="Chat Bot" />
-
         <Item to="/configuracion" label="Configuración" />
       </nav>
 

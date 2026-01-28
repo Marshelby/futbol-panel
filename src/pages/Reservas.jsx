@@ -1,7 +1,9 @@
-
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../hooks/useAuth";
+import DetalleReservaModal from "../components/reservas/DetalleReservaModal";
+import DetalleReservaLecturaModal from "../components/reservas/DetalleReservaLecturaModal";
+import { buildReservaLectura } from "../builders/buildReservaLectura";
 
 /* =========================
    FECHAS
@@ -21,7 +23,6 @@ const MESES = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
 
-/* fecha local YYYY-MM-DD */
 const toLocalDate = (d) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -34,6 +35,7 @@ const addDays = (date, days) => {
   d.setDate(d.getDate() + days);
   return d;
 };
+
 const startOfWeek = (date) => {
   const d = new Date(date);
   const day = d.getDay();
@@ -42,7 +44,9 @@ const startOfWeek = (date) => {
 };
 
 const formatCLP = (n) =>
-  new Intl.NumberFormat("es-CL", { maximumFractionDigits: 0 }).format(Number(n || 0));
+  new Intl.NumberFormat("es-CL", { maximumFractionDigits: 0 }).format(
+    Number(n || 0)
+  );
 
 export default function Reservas() {
   const { recinto } = useAuth();
@@ -60,17 +64,8 @@ export default function Reservas() {
   const [pagos, setPagos] = useState([]);
 
   const [modalData, setModalData] = useState(null);
-  useEffect(() => {
-    if (!modalData) return;
-
-    const onKey = (e) => {
-      if (e.key === "Escape") setModalData(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [modalData]);
-
   const [mostrarAdvertencia, setMostrarAdvertencia] = useState(false);
+  const [modalLectura, setModalLectura] = useState(null);
 
   /* =========================
      CARGA BASE
@@ -112,28 +107,40 @@ export default function Reservas() {
     );
 
     const diasPasados = diasSemanaISO.filter((d) => d < hoyISO);
-    const diasActuales = diasSemanaISO.filter((d) => d >= hoyISO);
+const diasFuturos = diasSemanaISO.filter((d) => d > hoyISO);
+const diaHoy = hoyISO;
 
     let agendaData = [];
     let pagosData = [];
 
-    if (diasActuales.length) {
-      const { data } = await supabase
-        .from("agenda_canchas")
-        .select("id, fecha, cancha_id, horario_id, nombre_cliente")
-        .eq("recinto_id", recintoId)
-        .in("fecha", diasActuales);
-      agendaData.push(...(data || []));
-    }
+    const fechasVivas = [...diasFuturos, diaHoy];
 
-    if (diasPasados.length) {
-      const { data } = await supabase
-        .from("agenda_canchas_historico")
-        .select("id, fecha, cancha_id, horario_id, nombre_cliente")
-        .eq("recinto_id", recintoId)
-        .in("fecha", diasPasados);
-      agendaData.push(...(data || []));
-    }
+if (fechasVivas.length) {
+  const { data } = await supabase
+    .from("agenda_canchas")
+    .select("id, fecha, cancha_id, horario_id, nombre_cliente, estado, telefono")
+    .eq("recinto_id", recintoId)
+    .in("fecha", fechasVivas);
+
+  agendaData.push(...(data || []));
+}
+
+    const fechasHistorico = [...diasPasados, diaHoy];
+
+if (fechasHistorico.length) {
+  const { data } = await supabase
+    .from("agenda_canchas_historico")
+    .select("id, fecha, cancha_id, horario_id, nombre_cliente, estado, telefono")
+    .eq("recinto_id", recintoId)
+    .in("fecha", fechasHistorico);
+
+  const historicoMarcado = (data || []).map(a => ({
+    ...a,
+    cerrado: true,
+  }));
+
+  agendaData.push(...historicoMarcado);
+}
 
     const idsActuales = agendaData.filter(a => a.fecha >= hoyISO).map(a => a.id);
     const idsPasados = agendaData.filter(a => a.fecha < hoyISO).map(a => a.id);
@@ -141,7 +148,7 @@ export default function Reservas() {
     if (idsActuales.length) {
       const { data } = await supabase
         .from("pagos_reservas")
-        .select("agenda_cancha_id, estado_pago, monto_total, monto_abonado")
+        .select("agenda_cancha_id, estado_pago, monto_total, monto_abonado, telefono")
         .in("agenda_cancha_id", idsActuales);
       pagosData.push(...(data || []));
     }
@@ -149,7 +156,7 @@ export default function Reservas() {
     if (idsPasados.length) {
       const { data } = await supabase
         .from("pagos_reservas_historico")
-        .select("agenda_cancha_id, estado_pago, monto_total, monto_abonado")
+        .select("agenda_cancha_id, estado_pago, monto_total, monto_abonado, telefono")
         .in("agenda_cancha_id", idsPasados);
       pagosData.push(...(data || []));
     }
@@ -195,24 +202,23 @@ export default function Reservas() {
   }, [fechaSeleccionada]);
 
   /* =========================
-     PRECIO (RPC)
+     PRECIO
   ========================= */
   const obtenerPrecio = async ({ fecha, hora }) => {
     if (!recintoId) return null;
 
-    const { data, error } = await supabase.rpc("get_precio_cancha", {
+    const { data } = await supabase.rpc("get_precio_cancha", {
       p_recinto_id: recintoId,
       p_fecha: fecha,
       p_hora: hora,
     });
 
-    if (error) return null;
     if (data === null || typeof data === "undefined") return null;
     return Number(data);
   };
 
   /* =========================
-     ABRIR MODAL
+     MODAL
   ========================= */
   const abrirModal = async (agendaItem, pago, hora) => {
     if (agendaItem.fecha < hoyISO) return;
@@ -266,38 +272,25 @@ export default function Reservas() {
     setModalData({ agenda: agendaItem, pago: pagoActual, hora });
   };
 
-  /* =========================
-     PAGAR
-  ========================= */
   const ejecutarPago = async () => {
-    if (!modalData?.agenda?.id) return;
+  if (!modalData?.agenda?.id) return;
 
-    const total = Number(modalData.pago?.monto_total || 0);
+  await supabase.rpc("rpc_cerrar_reserva_pagada", {
+    p_agenda_id: modalData.agenda.id,
+  });
 
-    await supabase
-      .from("pagos_reservas")
-      .upsert(
-        {
-          agenda_cancha_id: modalData.agenda.id,
-          estado_pago: "pagado",
-          monto_total: total,
-          monto_abonado: total,
-        },
-        { onConflict: "agenda_cancha_id" }
-      );
+  setMostrarAdvertencia(false);
+  setModalData(null);
+  await cargarAgendaSemana(inicioSemana);
+};
 
-    setMostrarAdvertencia(false);
-    setModalData(null);
-    await cargarAgendaSemana(inicioSemana);
-  };
-
-  const marcarPagado = () => {
-    if (fechaSeleccionada !== hoyISO) {
-      setMostrarAdvertencia(true);
-      return;
-    }
-    ejecutarPago();
-  };
+const marcarPagado = () => {
+  if (fechaSeleccionada !== hoyISO) {
+    setMostrarAdvertencia(true);
+    return;
+  }
+  ejecutarPago();
+};
 
   /* =========================
      RENDER
@@ -364,26 +357,59 @@ export default function Reservas() {
                   const pago = agendaItem ? mapaPagos[agendaItem.id] : null;
 
                   let texto = "Libre";
-                  let color = "bg-green-100 text-green-700";
+let color = "bg-green-100 text-green-700";
 
-                  if (agendaItem) {
-                    const montoAbonado = Number(pago?.monto_abonado || 0);
-                    const estado = pago?.estado_pago;
+if (agendaItem) {
+  // 0) HISTÓRICO CERRADO (solo visual)
+  if (agendaItem.cerrado) {
+    texto = "Pagado";
+    color = "bg-blue-200 text-blue-800";
+  }
 
-                    if (estado === "pagado") {
-                      texto = "Pagado";
-                      color = "bg-blue-100 text-blue-700";
-                    } else {
-                      texto = `Abono $${formatCLP(montoAbonado)}`;
-                      color = "bg-purple-100 text-purple-700";
-                    }
-                  }
+  // 1) BLOQUEADA
+  else if (agendaItem.estado === "bloqueada") {
+    texto = "Bloqueada";
+    color = "bg-gray-300 text-gray-700";
+  }
+
+  // 2) VIVO (pagos)
+  else {
+    const montoAbonado = Number(pago?.monto_abonado || 0);
+    const estadoPago = pago?.estado_pago;
+
+    if (estadoPago === "pagado") {
+      texto = "Pagado";
+      color = "bg-blue-100 text-blue-700";
+    } else if (montoAbonado > 0) {
+      texto = `Abono $${formatCLP(montoAbonado)}`;
+      color = "bg-purple-100 text-purple-700";
+    } else {
+      texto = "Por pagar";
+      color = "bg-red-100 text-red-700";
+    }
+  }
+}
 
                   return (
                     <td
                       key={c.id}
                       className="p-5 border text-center cursor-pointer"
-                      onClick={() => agendaItem && abrirModal(agendaItem, pago, h.hora)}
+                      onClick={() => {
+  if (!agendaItem) return;
+
+  if (agendaItem.cerrado) {
+    setModalLectura(
+      buildReservaLectura({
+        agenda: agendaItem,
+        pago,
+        hora: h.hora,
+        canchas,
+      })
+    );
+  } else if (agendaItem.estado !== "bloqueada") {
+    abrirModal(agendaItem, pago, h.hora);
+  }
+}}
                     >
                       <span className={`px-4 py-2 rounded-full text-xs font-semibold ${color}`}>
                         {texto}
@@ -406,160 +432,20 @@ export default function Reservas() {
       </table>
 
       {modalData && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4 transition-opacity animate-fadeIn" onClick={() => setModalData(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-black/10 transition-transform animate-scaleIn" onClick={(e) => e.stopPropagation()}>
-            {(() => {
-              const total = Number(modalData.pago?.monto_total || 0);
-              const abono = Number(modalData.pago?.monto_abonado || 0);
-              const saldo = Math.max(0, total - abono);
+  <DetalleReservaModal
+    modalData={modalData}
+    canchas={canchas}
+    onClose={() => setModalData(null)}
+    onMarcarPagado={marcarPagado}
+  />
+)}
 
-              const isPagado = modalData.pago?.estado_pago === "pagado" || saldo === 0;
-              const isConAbono = !isPagado && abono > 0;
-
-              const estadoLabel = isPagado
-                ? "RESERVA PAGADA"
-                : isConAbono
-                ? "CON ABONO"
-                : "PENDIENTE DE PAGO";
-
-              const estadoIcon = isPagado ? "✅" : isConAbono ? "🟣" : "⚠️";
-              const estadoClass = isPagado
-                ? "bg-blue-600"
-                : isConAbono
-                ? "bg-purple-600"
-                : "bg-red-600";
-
-              return (
-                <div>
-                  {/* Header estado */}
-                  <div className={`${estadoClass} text-white px-6 py-4`}>
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold tracking-wide opacity-90">
-                        Reserva
-                      </div>
-                      <button
-                        onClick={() => setModalData(null)}
-                        className="text-white/90 hover:text-white text-xl leading-none"
-                        aria-label="Cerrar"
-                        title="Cerrar"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <span className="text-lg">{estadoIcon}</span>
-                      <div className="text-lg font-black tracking-wide">
-                        {estadoLabel}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Contenido */}
-                  <div className="p-6">
-                    {/* Datos reserva */}
-                    <div className="rounded-xl border border-black/10 bg-gray-50 p-4 mb-4">
-                      <div className="text-xs font-semibold text-gray-500 mb-3 tracking-wide uppercase">
-                        Datos de la reserva
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="text-sm text-gray-500">👤 Cliente</div>
-                          <div className="text-sm font-bold text-gray-900 text-right break-words">
-                            {modalData.agenda.nombre_cliente}
-                          </div>
-                        </div>
-
-                        <div className="h-px bg-black/10" />
-
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="text-sm text-gray-500">📅 Fecha</div>
-                          <div className="text-sm font-bold text-gray-900 text-right">
-                            {modalData.agenda.fecha}
-                          </div>
-                        </div>
-
-                        <div className="h-px bg-black/10" />
-
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="text-sm text-gray-500">⏰ Hora</div>
-                          <div className="text-sm font-bold text-gray-900 text-right">
-                            {String(modalData.hora || "").slice(0, 5)}
-                          </div>
-                        </div>
-
-                        <div className="h-px bg-black/10" />
-
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="text-sm text-gray-500">🏟️ Cancha</div>
-                          <div className="text-sm font-bold text-gray-900 text-right">
-                            {canchas.find(c => c.id === modalData.agenda.cancha_id)?.nombre || "—"}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Resumen pago */}
-                    <div className="rounded-xl border border-black/10 bg-white p-4">
-                      <div className="text-xs font-semibold text-gray-500 mb-3 tracking-wide uppercase">
-                        Resumen de pago
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm text-gray-500">Total</div>
-                          <div className="text-sm font-extrabold text-gray-900">
-                            ${formatCLP(total)}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm text-gray-500">Abono</div>
-                          <div className="text-sm font-bold text-gray-900">
-                            ${formatCLP(abono)}
-                          </div>
-                        </div>
-
-                        <div className="h-px bg-black/10" />
-
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-gray-600">Saldo</div>
-                          <div
-                            className={`text-lg font-black ${
-                              saldo === 0 ? "text-green-600" : "text-red-600"
-                            }`}
-                          >
-                            ${formatCLP(saldo)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Acciones */}
-                    <div className="mt-5 pt-4 border-t border-black/10 space-y-2">
-                      {modalData.pago?.estado_pago !== "pagado" && (
-                        <button
-                          onClick={marcarPagado}
-                          className="w-full bg-black text-white py-3 rounded-xl font-bold hover:opacity-95 active:opacity-90"
-                        >
-                          💰 Marcar como pagado
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => setModalData(null)}
-                        className="w-full border border-black/20 py-3 rounded-xl font-semibold hover:bg-gray-50"
-                      >
-                        Cerrar
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      )}
+{modalLectura && (
+  <DetalleReservaLecturaModal
+    data={modalLectura}
+    onClose={() => setModalLectura(null)}
+  />
+)}
 
       {mostrarAdvertencia && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

@@ -3,10 +3,13 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../hooks/useAuth";
 
 import BotTemplate from "./BotTemplate";
-import BotOrderModal from "./BotOrderModal";
+import BotOrderModalContainer from "./modales/BotOrderModalContainer";
 
 import OrderStatusPanel from "./OrderStatusPanel";
 import OrderHistoryPanel from "./OrderHistoryPanel";
+
+// 🔌 NUEVO: resolver de valores
+import resolverValores from "./utils/resolverValores";
 
 export default function BotControlPanel() {
   const { recinto } = useAuth();
@@ -107,10 +110,17 @@ export default function BotControlPanel() {
   const confirmarOrden = async () => {
     if (!plantillaSeleccionada || !recintoId) return;
 
+    // 🧠 NUEVO: resolver valores antes de construir el mensaje
+    const valoresResueltos = resolverValores({
+      plantilla: plantillaSeleccionada,
+      valores,
+      canchas,
+    });
+
     let mensaje = plantillaSeleccionada.mensaje_publico_template;
 
-    Object.entries(valores).forEach(([k, v]) => {
-      mensaje = mensaje.replace(`{{${k}}}`, v || "");
+    Object.entries(valoresResueltos).forEach(([k, v]) => {
+      mensaje = mensaje.replace(`{{${k}}}`, v);
     });
 
     const ordenOptimista = {
@@ -172,10 +182,7 @@ export default function BotControlPanel() {
       {/* TEXTO GUÍA DESTACADO */}
       <div className="px-4 py-3 bg-white border-b border-black">
         <div className="flex items-center gap-3">
-          {/* Indicador visual */}
           <div className="w-1.5 h-8 bg-blue-600 rounded-full" />
-
-          {/* Texto */}
           <p className="text-lg font-bold text-gray-900 tracking-tight">
             {categoriaActiva ? "Escoge una plantilla" : "Escoge una categoría"}
           </p>
@@ -208,7 +215,7 @@ export default function BotControlPanel() {
       </div>
 
       {/* MODAL PLANTILLA */}
-      <BotOrderModal
+      <BotOrderModalContainer
         plantilla={plantillaSeleccionada}
         valores={valores}
         setValores={setValores}

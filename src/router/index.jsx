@@ -9,6 +9,7 @@ import Login from "../pages/Login";
 import Dashboard from "../pages/Dashboard";
 import Reservas from "../pages/Reservas";
 import Calendario from "../pages/Calendario";
+import Cronograma from "../pages/Cronograma";
 import Contabilidad from "../pages/Contabilidad";
 import Conversaciones from "../pages/Conversaciones";
 import Configuracion from "../pages/Configuracion";
@@ -55,6 +56,10 @@ const router = createBrowserRouter([
       {
         path: "/calendario",
         element: <Calendario />,
+      },
+      {
+        path: "/cronograma",
+        element: <Cronograma />,
       },
       {
         path: "/contabilidad",
